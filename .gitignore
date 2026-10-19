@@ -1,0 +1,4 @@
+# Only patches go to GitHub; everything else stays local
+/*
+!/.gitignore
+!/patches/
