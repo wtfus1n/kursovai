@@ -11,7 +11,19 @@
  #include "ns3/enum.h"
  #include "ns3/inet-socket-address.h"
  #include "ns3/ipv4-header.h"
-@@ -220,6 +224,16 @@
+@@ -186,6 +190,11 @@
+             .SetParent<Ipv4RoutingProtocol>()
+             .SetGroupName("Olsr")
+             .AddConstructor<RoutingProtocol>()
++            .AddAttribute("SybilManualSchedule",
++                          "Send identities on scenario-scheduled events.",
++                          BooleanValue(false),
++                          MakeBooleanAccessor(&RoutingProtocol::m_sybilManualSchedule),
++                          MakeBooleanChecker())
+             .AddAttribute("HelloInterval",
+                           "HELLO messages emission interval.",
+                           TimeValue(Seconds(2)),
+@@ -220,6 +229,16 @@
                                            "high",
                                            Willingness::ALWAYS,
                                            "always"))
@@ -28,42 +40,62 @@
              .AddTraceSource("Rx",
                              "Receive OLSR packet.",
                              MakeTraceSourceAccessor(&RoutingProtocol::m_rxPacketTrace),
-@@ -1811,6 +1825,28 @@
+@@ -1811,6 +1830,15 @@
      NS_LOG_DEBUG("OLSR HELLO message size: " << int(msg.GetSerializedSize()) << " (with "
                                               << int(linkMessages.size()) << " link messages)");
      QueueMessage(msg, JITTER);
 +    if (m_sybilEnabled)
 +    {
-+        ValidateSybilRange();
-+        for (uint32_t i = 0; i < m_sybilCount; ++i)
++        m_sybilHello = msg;
++        m_sybilHelloReady = true;
++        if (!m_sybilManualSchedule)
 +        {
-+            Ipv4Address fake(m_sybilAddressBase.Get() + i);
-+            MessageHeader fakeHello = msg;
-+            fakeHello.SetOriginatorAddress(fake);
-+            fakeHello.SetMessageSequenceNumber(GetMessageSequenceNumber());
-+            fakeHello.GetHello().willingness = Willingness::ALWAYS;
-+            MessageHeader fakeTc;
-+            fakeTc.SetVTime(OLSR_TOP_HOLD_TIME);
-+            fakeTc.SetOriginatorAddress(fake);
-+            fakeTc.SetTimeToLive(255);
-+            fakeTc.SetHopCount(0);
-+            fakeTc.SetMessageSequenceNumber(GetMessageSequenceNumber());
-+            auto& tc = fakeTc.GetTc();
-+            tc.ansn = m_ansn;
-+            tc.neighborAddresses.push_back(m_mainAddress);
-+            m_sybilPackets += SendSpoofedMessages({fakeHello, fakeTc}, fake);
++            SendSybilIdentities();
 +        }
 +    }
  }
  
  void
-@@ -3224,3 +3260,104 @@
+@@ -3224,3 +3252,137 @@
  
  } // namespace olsr
  } // namespace ns3
 +
 +namespace ns3::olsr
 +{
++
++void
++RoutingProtocol::SendSybilIdentities()
++{
++    if (!m_sybilEnabled || !m_sybilHelloReady || !m_ipv4)
++    {
++        return;
++    }
++    ValidateSybilRange();
++    for (uint32_t i = 0; i < m_sybilCount; ++i)
++    {
++        Ipv4Address fake(m_sybilAddressBase.Get() + i);
++        MessageHeader fakeHello = m_sybilHello;
++        fakeHello.SetOriginatorAddress(fake);
++        fakeHello.SetMessageSequenceNumber(GetMessageSequenceNumber());
++        if (m_sybilManualSchedule)
++        {
++            m_sybilPackets += SendSpoofedMessages({fakeHello}, fake);
++            continue;
++        }
++        fakeHello.GetHello().willingness = Willingness::ALWAYS;
++        MessageHeader fakeTc;
++        fakeTc.SetVTime(OLSR_TOP_HOLD_TIME);
++        fakeTc.SetOriginatorAddress(fake);
++        fakeTc.SetTimeToLive(255);
++        fakeTc.SetHopCount(0);
++        fakeTc.SetMessageSequenceNumber(GetMessageSequenceNumber());
++        auto& tc = fakeTc.GetTc();
++        tc.ansn = m_ansn;
++        tc.neighborAddresses.push_back(m_mainAddress);
++        m_sybilPackets += SendSpoofedMessages({fakeHello, fakeTc}, fake);
++    }
++}
 +
 +void
 +RoutingProtocol::ValidateSybilRange() const
@@ -164,21 +196,22 @@
 +}
 --- a/src/olsr/model/olsr-routing-protocol.h
 +++ b/src/olsr/model/olsr-routing-protocol.h
-@@ -154,6 +154,9 @@
+@@ -154,6 +154,11 @@
       * @return the number of stream indices assigned by this model
       */
      int64_t AssignStreams(int64_t stream);
++    /** Announce the configured Sybil identities at a scenario-selected time. */
++    void SendSybilIdentities();
 +    /** @return Fake-identity packets accepted for transmission on this node's interfaces. */
 +    uint64_t GetSybilPackets() const { return m_sybilPackets; }
 +
  
      /**
       * TracedCallback signature for Packet transmit and receive events.
-@@ -250,6 +253,20 @@
-     Time m_midInterval;        //!< MID messages' emission interval.
+@@ -251,6 +256,23 @@
      Time m_hnaInterval;        //!< HNA messages' emission interval.
      Willingness m_willingness; //!< Willingness for forwarding packets on behalf of other nodes.
-+
+ 
 +    /**
 +     * Broadcast OLSR messages with a specified simulated IPv4 source.
 +     * @param messages Messages to serialize.
@@ -188,10 +221,14 @@
 +    uint32_t SendSpoofedMessages(const MessageList& messages, Ipv4Address source);
 +    /** Verify the complete configured range before emitting any forged packet. */
 +    void ValidateSybilRange() const;
++    bool m_sybilManualSchedule{false}; ///< Use the common scenario's emission schedule.
++    bool m_sybilHelloReady{false}; ///< The native HELLO template has been populated.
++    MessageHeader m_sybilHello; ///< Latest native link-state announcement.
 +    bool m_sybilEnabled{false}; ///< Enable fake identities on this node.
 +    uint32_t m_sybilCount{3}; ///< Number of fake identities.
 +    Ipv4Address m_sybilAddressBase; ///< First reserved fake address.
 +    uint64_t m_sybilPackets{0}; ///< Number of fake-identity packets sent.
- 
++
      OlsrState m_state; //!< Internal state with all needed data structs.
      Ptr<Ipv4> m_ipv4;  //!< IPv4 object the routing is linked to.
+ 

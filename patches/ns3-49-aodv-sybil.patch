@@ -1,9 +1,22 @@
 --- a/src/aodv/model/aodv-routing-protocol.cc
 +++ b/src/aodv/model/aodv-routing-protocol.cc
-@@ -182,6 +182,25 @@
+@@ -25,6 +25,7 @@
+ #include "ns3/random-variable-stream.h"
+ #include "ns3/string.h"
+ #include "ns3/trace-source-accessor.h"
++#include "ns3/ipv4-raw-socket-factory.h"
+ #include "ns3/udp-header.h"
+ #include "ns3/udp-socket-factory.h"
+ #include "ns3/wifi-mpdu.h"
+@@ -182,6 +183,30 @@
              .SetParent<Ipv4RoutingProtocol>()
              .SetGroupName("Aodv")
              .AddConstructor<RoutingProtocol>()
++            .AddAttribute("SybilManualSchedule",
++                          "Send spoofed-source identities on scenario-scheduled events.",
++                          BooleanValue(false),
++                          MakeBooleanAccessor(&RoutingProtocol::m_sybilManualSchedule),
++                          MakeBooleanChecker())
 +            .AddAttribute("SybilEnabled",
 +                          "Send additional HELLO identities from this physical node.",
 +                          BooleanValue(false),
@@ -26,7 +39,7 @@
              .AddAttribute("HelloInterval",
                            "HELLO messages emission interval.",
                            TimeValue(Seconds(1)),
-@@ -1972,6 +1991,19 @@
+@@ -1972,6 +1997,93 @@
  }
  
  void
@@ -35,10 +48,84 @@
 +                                Ipv4Address destination,
 +                                Ipv4Address identity)
 +{
-+    if (m_sybilEnabled && m_ipv4 &&
-+        socket->SendTo(packet, 0, InetSocketAddress(destination, AODV_PORT)) >= 0)
++    if (!m_sybilEnabled || !m_ipv4)
++    {
++        return;
++    }
++
++    if (m_sybilManualSchedule)
++    {
++        UdpHeader udp;
++        udp.SetSourcePort(AODV_PORT);
++        udp.SetDestinationPort(AODV_PORT);
++        if (Node::ChecksumEnabled())
++        {
++            udp.EnableChecksums();
++            udp.InitializeChecksum(identity, destination, 17);
++        }
++        packet->AddHeader(udp);
++        Ipv4Header ip;
++        ip.SetSource(identity);
++        ip.SetDestination(destination);
++        ip.SetProtocol(17);
++        ip.SetTtl(1);
++        ip.SetPayloadSize(packet->GetSize());
++        if (Node::ChecksumEnabled())
++        {
++            ip.EnableChecksum();
++        }
++        packet->AddHeader(ip);
++        auto raw = Socket::CreateSocket(m_ipv4->GetObject<Node>(), Ipv4RawSocketFactory::GetTypeId());
++        raw->SetAttribute("IpHeaderInclude", BooleanValue(true));
++        raw->SetAttribute("Protocol", UintegerValue(17));
++        raw->SetAllowBroadcast(true);
++        raw->BindToNetDevice(socket->GetBoundNetDevice());
++        if (raw->SendTo(packet, 0, InetSocketAddress(destination, 0)) > 0)
++        {
++            m_sybilIdentityTx(identity);
++        }
++        raw->Close();
++    }
++    else if (socket->SendTo(packet, 0, InetSocketAddress(destination, AODV_PORT)) >= 0)
 +    {
 +        m_sybilIdentityTx(identity);
++    }
++}
++
++Ptr<Packet>
++RoutingProtocol::MakeSybilHello(Ipv4Address identity)
++{
++    RrepHeader hello(0,
++                     0,
++                     identity,
++                     m_seqNo,
++                     identity,
++                     Time(m_allowedHelloLoss * m_helloInterval));
++    auto packet = Create<Packet>();
++    SocketIpTtlTag tag;
++    tag.SetTtl(1);
++    packet->AddPacketTag(tag);
++    packet->AddHeader(hello);
++    packet->AddHeader(TypeHeader(AODVTYPE_RREP));
++    return packet;
++}
++
++void
++RoutingProtocol::SendSybilIdentities()
++{
++    if (!m_sybilEnabled || !m_sybilManualSchedule || !m_ipv4)
++    {
++        return;
++    }
++    for (const auto& [socket, iface] : m_socketAddresses)
++    {
++        const auto destination = iface.GetMask() == Ipv4Mask::GetOnes() ? Ipv4Address("255.255.255.255")
++                                                                       : iface.GetBroadcast();
++        for (uint32_t i = 0; i < m_sybilIdentityCount; ++i)
++        {
++            const Ipv4Address identity(m_sybilFirstAddress.Get() + i);
++            SendSybilHello(socket, MakeSybilHello(identity), destination, identity);
++        }
 +    }
 +}
 +
@@ -46,25 +133,16 @@
  RoutingProtocol::SendHello()
  {
      NS_LOG_FUNCTION(this);
-@@ -2010,6 +2042,30 @@
+@@ -2010,6 +2122,21 @@
          }
          Time jitter = MilliSeconds(m_uniformRandomVariable->GetInteger(0, 10));
          Simulator::Schedule(jitter, &RoutingProtocol::SendTo, this, socket, packet, destination);
-+        if (m_sybilEnabled)
++        if (m_sybilEnabled && !m_sybilManualSchedule)
 +        {
 +            for (uint32_t identity = 0; identity < m_sybilIdentityCount; ++identity)
 +            {
 +                Ipv4Address fake(m_sybilFirstAddress.Get() + identity);
-+                RrepHeader forged(0,
-+                                  0,
-+                                  fake,
-+                                  m_seqNo,
-+                                  fake,
-+                                  Time(m_allowedHelloLoss * m_helloInterval));
-+                Ptr<Packet> sybilPacket = Create<Packet>();
-+                sybilPacket->AddPacketTag(tag);
-+                sybilPacket->AddHeader(forged);
-+                sybilPacket->AddHeader(tHeader);
++                auto sybilPacket = MakeSybilHello(fake);
 +                Simulator::Schedule(jitter + MilliSeconds(identity + 1),
 +                                    &RoutingProtocol::SendSybilHello,
 +                                    Ptr<RoutingProtocol>(this),
@@ -77,7 +155,7 @@
      }
  }
  
-@@ -2268,6 +2324,20 @@
+@@ -2268,6 +2395,20 @@
  void
  RoutingProtocol::DoInitialize()
  {
@@ -108,7 +186,17 @@
  
  #include <map>
  
-@@ -461,6 +462,23 @@
+@@ -54,6 +55,9 @@
+     static TypeId GetTypeId();
+     static const uint32_t AODV_PORT;
+ 
++    /** Announce the configured Sybil identities at a scenario-selected time. */
++    void SendSybilIdentities();
++
+     /// constructor
+     RoutingProtocol();
+     ~RoutingProtocol() override;
+@@ -461,6 +465,27 @@
       */
      void SendTo(Ptr<Socket> socket, Ptr<Packet> packet, Ipv4Address destination);
  
@@ -124,6 +212,10 @@
 +                        Ipv4Address destination,
 +                        Ipv4Address identity);
 +
++    /** @param identity Fake IPv4 address. @return A serialized AODV HELLO. */
++    Ptr<Packet> MakeSybilHello(Ipv4Address identity);
++
++    bool m_sybilManualSchedule{false}; ///< Use the common scenario's emission schedule.
 +    bool m_sybilEnabled{false}; ///< Whether fake HELLO identities are enabled.
 +    uint32_t m_sybilIdentityCount{3}; ///< Number of additional identities per HELLO.
 +    Ipv4Address m_sybilFirstAddress; ///< First address of the scenario-reserved identity range.

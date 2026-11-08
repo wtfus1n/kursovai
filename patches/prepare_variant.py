@@ -17,6 +17,8 @@ def main():
     parser.add_argument("--protocol", choices=("aodv", "olsr"), required=True)
     parser.add_argument("--attack", choices=("blackhole", "grayhole", "wormhole", "sybil"), required=True)
     parser.add_argument("--check-only", action="store_true", help="Check source and patch without copying")
+    parser.add_argument("--comparison", action="store_true",
+                        help="Install the shared AODV/OLSR comparison scenario")
     args = parser.parse_args()
     source = args.source.expanduser().resolve()
     destination = args.destination.expanduser().resolve(strict=False)
@@ -36,6 +38,9 @@ def main():
         item = source / relpath
         if not item.is_file() or hashlib.sha256(item.read_bytes()).hexdigest() != expected:
             parser.error(f"Source differs from the tested clean ns-3.49: {relpath}")
+    for relpath in entry.get("created_files", []):
+        if (source / relpath).exists():
+            parser.error(f"Expected a clean source tree without {relpath}")
     command = ["patch", "--batch", "--forward", "--fuzz=0", "-p1", "-i", str(patch)]
     subprocess.run(command + ["--dry-run"], cwd=source, check=True)
     if args.check_only:
@@ -59,6 +64,15 @@ def main():
     scratch = destination / "scratch"
     for filename in entry.get("scenario_files", []):
         shutil.copy2(tests / filename, scratch / filename)
+    if args.comparison:
+        comparison = (bundle / "experiments" / "matched-attacks.cc").read_text(encoding="utf-8")
+        definitions = (
+            f"#define SCALE_AODV {int(args.protocol == 'aodv')}\n"
+            f'#define SCALE_ATTACK "{args.attack}"\n'
+            f"#define SCALE_WORMHOLE {int(args.attack == 'wormhole')}\n"
+            f"#define SCALE_SYBIL {int(args.attack == 'sybil')}\n"
+        )
+        (scratch / "matched-attacks.cc").write_text(definitions + comparison, encoding="utf-8")
     print(f"Prepared {destination}")
     print("The original source is unchanged. Build and run the checks described in README.md.")
 

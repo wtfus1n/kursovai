@@ -10,7 +10,19 @@
  #include "ns3/inet-socket-address.h"
  #include "ns3/ipv4-header.h"
  #include "ns3/ipv4-packet-info-tag.h"
-@@ -220,6 +223,18 @@
+@@ -186,6 +189,11 @@
+             .SetParent<Ipv4RoutingProtocol>()
+             .SetGroupName("Olsr")
+             .AddConstructor<RoutingProtocol>()
++            .AddAttribute("AttackForwardingOnly",
++                          "Restrict the attack to transit unicast data.",
++                          BooleanValue(false),
++                          MakeBooleanAccessor(&RoutingProtocol::m_attackForwardingOnly),
++                          MakeBooleanChecker())
+             .AddAttribute("HelloInterval",
+                           "HELLO messages emission interval.",
+                           TimeValue(Seconds(2)),
+@@ -220,6 +228,18 @@
                                            "high",
                                            Willingness::ALWAYS,
                                            "always"))
@@ -29,7 +41,7 @@
              .AddTraceSource("Rx",
                              "Receive OLSR packet.",
                              MakeTraceSourceAccessor(&RoutingProtocol::m_rxPacketTrace),
-@@ -1600,12 +1615,19 @@
+@@ -1600,12 +1620,19 @@
              m_state.FindMprSelectorTuple(GetMainAddress(senderAddress));
          if (mprselTuple != nullptr)
          {
@@ -39,7 +51,7 @@
 -            // synchronization with neighbors.
 -            QueueMessage(olsrMessage, JITTER);
 -            retransmitted = true;
-+            if (ShouldAttackDrop())
++            if (!m_attackForwardingOnly && ShouldAttackDrop())
 +            {
 +                ++m_attackControlDrops;
 +                // Mark deliberately consumed messages to suppress a second forwarding chance.
@@ -55,20 +67,22 @@
          }
      }
  
-@@ -1719,7 +1741,7 @@
+@@ -1719,7 +1746,8 @@
      olsr::MessageHeader::Hello& hello = msg.GetHello();
  
      hello.SetHTime(m_helloInterval);
 -    hello.willingness = m_willingness;
-+    hello.willingness = m_attackEnabled ? Willingness::ALWAYS : m_willingness;
++    hello.willingness = m_attackEnabled && !m_attackForwardingOnly ? Willingness::ALWAYS
++                                                                     : m_willingness;
  
      std::vector<olsr::MessageHeader::Hello::LinkMessage>& linkMessages = hello.linkMessages;
  
-@@ -2979,6 +3001,14 @@
+@@ -2979,6 +3007,15 @@
          }
      }
  
-+    if (!dst.IsMulticast() && !dst.IsBroadcast() && ShouldAttackDrop())
++    if (!dst.IsMulticast() && !dst.IsBroadcast() &&
++        (!m_attackForwardingOnly || m_ipv4->IsForwarding(iif)) && ShouldAttackDrop())
 +    {
 +        ++m_attackDataDrops;
 +        m_attackDropTrace(p);
@@ -79,7 +93,7 @@
      NS_LOG_LOGIC("Forward packet");
      // Forwarding
      Ptr<Ipv4Route> rtentry;
-@@ -3168,6 +3198,19 @@
+@@ -3168,6 +3205,19 @@
  {
      NS_LOG_FUNCTION(this << stream);
      m_uniformRandomVariable->SetStream(stream);
@@ -99,7 +113,7 @@
      return 1;
  }
  
-@@ -3224,3 +3267,24 @@
+@@ -3224,3 +3274,24 @@
  
  } // namespace olsr
  } // namespace ns3
@@ -139,13 +153,13 @@
      /**
       * TracedCallback signature for Packet transmit and receive events.
       *
-@@ -250,6 +256,16 @@
-     Time m_midInterval;        //!< MID messages' emission interval.
+@@ -251,6 +257,17 @@
      Time m_hnaInterval;        //!< HNA messages' emission interval.
      Willingness m_willingness; //!< Willingness for forwarding packets on behalf of other nodes.
-+
+ 
 +    /** @return Whether this eligible forwarding item is deliberately dropped. */
 +    bool ShouldAttackDrop();
++    bool m_attackForwardingOnly{false}; ///< Skip manipulation of routing messages.
 +    bool m_attackEnabled{false}; ///< Enable the forwarding attack on this node.
 +    Time m_attackStart; ///< Start of malicious forwarding.
 +    uint64_t m_attackDataDrops{0}; ///< Deliberately dropped transit data packets.
@@ -153,6 +167,7 @@
 +    TracedCallback<Ptr<const Packet>> m_attackDropTrace; ///< Deliberate data packet drop.
 +    double m_attackDropProbability{0.5}; ///< Drop probability for eligible items.
 +    Ptr<UniformRandomVariable> m_attackRandomVariable; ///< RNG separate from OLSR jitter.
- 
++
      OlsrState m_state; //!< Internal state with all needed data structs.
      Ptr<Ipv4> m_ipv4;  //!< IPv4 object the routing is linked to.
+ 

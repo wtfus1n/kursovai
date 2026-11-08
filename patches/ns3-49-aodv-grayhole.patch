@@ -13,7 +13,19 @@
  #include "ns3/pointer.h"
  #include "ns3/random-variable-stream.h"
  #include "ns3/string.h"
-@@ -323,6 +326,29 @@
+@@ -182,6 +185,11 @@
+             .SetParent<Ipv4RoutingProtocol>()
+             .SetGroupName("Aodv")
+             .AddConstructor<RoutingProtocol>()
++            .AddAttribute("AttackForwardingOnly",
++                          "Restrict the attack to transit unicast data.",
++                          BooleanValue(false),
++                          MakeBooleanAccessor(&RoutingProtocol::m_attackForwardingOnly),
++                          MakeBooleanChecker())
+             .AddAttribute("HelloInterval",
+                           "HELLO messages emission interval.",
+                           TimeValue(Seconds(1)),
+@@ -323,6 +331,29 @@
                            MakeBooleanAccessor(&RoutingProtocol::SetBroadcastEnable,
                                                &RoutingProtocol::GetBroadcastEnable),
                            MakeBooleanChecker())
@@ -43,7 +55,7 @@
              .AddAttribute("UniformRv",
                            "Access to the underlying UniformRandomVariable",
                            StringValue("ns3::UniformRandomVariable"),
-@@ -385,6 +411,12 @@
+@@ -385,6 +416,12 @@
  {
      NS_LOG_FUNCTION(this << stream);
      m_uniformRandomVariable->SetStream(stream);
@@ -56,7 +68,7 @@
      return 1;
  }
  
-@@ -625,6 +657,20 @@
+@@ -625,6 +662,20 @@
          return true;
      }
  
@@ -77,11 +89,11 @@
      // Forwarding
      return Forwarding(p, header, ucb, ecb);
  }
-@@ -1439,6 +1485,12 @@
+@@ -1439,6 +1490,12 @@
          SendReply(rreqHeader, toOrigin);
          return;
      }
-+    if (m_isMalicious)
++    if (m_isMalicious && !m_attackForwardingOnly)
 +    {
 +        m_routingTable.LookupRoute(origin, toOrigin);
 +        SendAttackReply(rreqHeader, toOrigin);
@@ -90,13 +102,10 @@
      /*
       * (ii) or it has an active route to the destination, the destination sequence number in the
       * node's existing route table entry for the destination is valid and greater than or equal to
-@@ -1515,6 +1567,32 @@
-                             socket,
-                             packet,
-                             destination);
-+    }
-+}
-+
+@@ -1518,6 +1575,32 @@
+     }
+ }
+ 
 +void
 +RoutingProtocol::SendAttackReply(const RreqHeader& request, const RoutingTableEntry& reverse)
 +{
@@ -120,9 +129,12 @@
 +    if (socket->SendTo(packet, 0, InetSocketAddress(reverse.GetNextHop(), AODV_PORT)) >= 0)
 +    {
 +        m_forgedReply(request.GetDst(), sequence);
-     }
- }
- 
++    }
++}
++
+ void
+ RoutingProtocol::SendReply(const RreqHeader& rreqHeader, const RoutingTableEntry& toOrigin)
+ {
 --- a/src/aodv/model/aodv-routing-protocol.h
 +++ b/src/aodv/model/aodv-routing-protocol.h
 @@ -28,6 +28,7 @@
@@ -133,24 +145,25 @@
  
  #include <map>
  
-@@ -53,6 +54,11 @@
-      */
+@@ -54,6 +55,11 @@
      static TypeId GetTypeId();
      static const uint32_t AODV_PORT;
-+
+ 
 +    /** @brief Signature for the AttackDrop trace. */
 +    typedef void (*AttackDropCallback)(Ptr<const Packet>, const Ipv4Header&);
 +    /** @brief Signature for the ForgedReply trace. */
 +    typedef void (*ForgedReplyCallback)(Ipv4Address, uint32_t);
- 
++
      /// constructor
      RoutingProtocol();
-@@ -250,6 +256,20 @@
+     ~RoutingProtocol() override;
+@@ -250,6 +256,21 @@
      bool m_enableHello;      ///< Indicates whether a hello messages enable
      bool m_enableBroadcast;  ///< Indicates whether a a broadcast data packets forwarding enable
  
 +    double m_attackDropProbability{0.5}; ///< Independent drop probability in [0, 1].
 +    Ptr<UniformRandomVariable> m_attackRandomVariable; ///< Attack RNG, allocated when needed.
++    bool m_attackForwardingOnly{false}; ///< Skip manipulation of routing messages.
 +    bool m_isMalicious{false}; ///< Enable route attraction and transit packet dropping.
 +    uint32_t m_attackSequenceBoost{100}; ///< Sequence number increment in forged replies.
 +    TracedCallback<Ptr<const Packet>, const Ipv4Header&> m_attackDrop; ///< Silently dropped transit packet.

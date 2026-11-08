@@ -128,3 +128,217 @@
      /// Hello timer
      Timer m_htimer;
      /// Schedule next send of hello message
+--- /dev/null
++++ b/scratch/coursework-wormhole-channel.h
+@@ -0,0 +1,211 @@
++// SPDX-License-Identifier: GPL-2.0-only
++#ifndef COURSEWORK_WORMHOLE_CHANNEL_H
++#define COURSEWORK_WORMHOLE_CHANNEL_H
++
++#include "ns3/ipv4-header.h"
++#include "ns3/node.h"
++#include "ns3/packet.h"
++#include "ns3/simple-channel.h"
++#include "ns3/simple-net-device.h"
++#include "ns3/simulator.h"
++#include "ns3/tag.h"
++#include "ns3/udp-header.h"
++
++#include <algorithm>
++#include <utility>
++#include <vector>
++
++namespace ns3
++{
++
++/** Mark user data that crossed the tunnel without changing the simulated frame. */
++class WormholeDataTag : public Tag
++{
++  public:
++    /** @return Type of the tunnel marker. */
++    static TypeId GetTypeId()
++    {
++        static TypeId tid = TypeId("ns3::WormholeDataTag")
++                                .SetParent<Tag>()
++                                .AddConstructor<WormholeDataTag>();
++        return tid;
++    }
++
++    TypeId GetInstanceTypeId() const override { return GetTypeId(); }
++    uint32_t GetSerializedSize() const override { return 1; }
++    void Serialize(TagBuffer buffer) const override { buffer.WriteU8(1); }
++    void Deserialize(TagBuffer buffer) override { (void)buffer.ReadU8(); }
++    void Print(std::ostream& os) const override { os << "wormhole data"; }
++};
++
++/** Replay frames heard by one endpoint within radio reach of the other endpoint. */
++class ComparisonWormholeChannel : public SimpleChannel
++{
++  public:
++    /** Frame scope admitted by the hidden link. */
++    enum class Mode
++    {
++        OFF,
++        CONTROL_ONLY,
++        CONTROL_AND_DATA
++    };
++
++    /** @return Type of the channel. */
++    static TypeId GetTypeId()
++    {
++        static TypeId tid = TypeId("ns3::ComparisonWormholeChannel")
++                                .SetParent<SimpleChannel>()
++                                .AddConstructor<ComparisonWormholeChannel>();
++        return tid;
++    }
++
++    /** Counters for frames with at least one eligible receiver on the far side. */
++    struct Counters
++    {
++        uint64_t routing = 0; ///< Routing frames transferred.
++        uint64_t arp = 0;     ///< Address resolution frames transferred.
++        uint64_t data = 0;    ///< User data frames transferred.
++        uint64_t replays = 0; ///< Individual frame deliveries scheduled on the far side.
++    };
++
++    /**
++     * Define the two disjoint one-hop neighborhoods, including the endpoints.
++     * @param left Devices within reach of the left endpoint.
++     * @param right Devices within reach of the right endpoint.
++     * @param mode Frame scope admitted by the tunnel.
++     * @param delay One-way hidden channel delay.
++     * @param routingPort UDP port of the routing protocol.
++     */
++    void Configure(std::vector<Ptr<SimpleNetDevice>> left,
++                   std::vector<Ptr<SimpleNetDevice>> right,
++                   Mode mode,
++                   Time delay,
++                   uint16_t routingPort)
++    {
++        m_left = std::move(left);
++        m_right = std::move(right);
++        m_mode = mode;
++        m_tunnelDelay = delay;
++        m_routingPort = routingPort;
++    }
++
++    /** @return Counts of admitted frames and scheduled replays. */
++    const Counters& GetCounters() const { return m_counters; }
++
++    void Send(Ptr<Packet> packet,
++              uint16_t protocol,
++              Mac48Address to,
++              Mac48Address from,
++              Ptr<SimpleNetDevice> sender) override
++    {
++        SimpleChannel::Send(packet, protocol, to, from, sender);
++        if (m_mode == Mode::OFF)
++        {
++            return;
++        }
++
++        const std::vector<Ptr<SimpleNetDevice>>* recipients = nullptr;
++        if (std::find(m_left.begin(), m_left.end(), sender) != m_left.end())
++        {
++            recipients = &m_right;
++        }
++        else if (std::find(m_right.begin(), m_right.end(), sender) != m_right.end())
++        {
++            recipients = &m_left;
++        }
++        if (!recipients)
++        {
++            return;
++        }
++
++        constexpr uint16_t arpEtherType = 0x0806;
++        constexpr uint16_t ipv4EtherType = 0x0800;
++        if (protocol != arpEtherType && protocol != ipv4EtherType)
++        {
++            return;
++        }
++        const bool arp = protocol == arpEtherType;
++        const bool routing = !arp && IsRoutingFrame(packet);
++        const bool data = !arp && !routing;
++        // ARP is available in both modes because routing replies may use unicast.
++        if (data && m_mode != Mode::CONTROL_AND_DATA)
++        {
++            return;
++        }
++
++        bool transferred = false;
++        for (const auto& receiver : *recipients)
++        {
++            if (!to.IsBroadcast() && !to.IsGroup() && to != Mac48Address::ConvertFrom(receiver->GetAddress()))
++            {
++                continue;
++            }
++            auto replay = packet->Copy();
++            if (data)
++            {
++                WormholeDataTag tag;
++                replay->ReplacePacketTag(tag);
++            }
++            // Inject directly at the far side, preserving the original Ethernet addresses.
++            Simulator::ScheduleWithContext(receiver->GetNode()->GetId(),
++                                           m_tunnelDelay,
++                                           &SimpleNetDevice::Receive,
++                                           receiver,
++                                           replay,
++                                           protocol,
++                                           to,
++                                           from);
++            transferred = true;
++            ++m_counters.replays;
++        }
++        if (transferred)
++        {
++            m_counters.arp += arp;
++            m_counters.routing += routing;
++            m_counters.data += data;
++        }
++    }
++
++  protected:
++    void DoDispose() override
++    {
++        m_left.clear();
++        m_right.clear();
++        SimpleChannel::DoDispose();
++    }
++
++  private:
++    /**
++     * Classify an IPv4 routing datagram by its destination port.
++     * @param packet Link payload containing an IPv4 packet.
++     * @return True for a UDP datagram addressed to the routing protocol.
++     */
++    bool IsRoutingFrame(Ptr<const Packet> packet) const
++    {
++        constexpr uint8_t udpProtocol = 17;
++        constexpr uint32_t minimumIpv4Size = 20;
++        if (packet->GetSize() < minimumIpv4Size)
++        {
++            return false;
++        }
++        auto payload = packet->Copy();
++        Ipv4Header ip;
++        payload->RemoveHeader(ip);
++        UdpHeader udp;
++        return ip.GetProtocol() == udpProtocol && ip.GetFragmentOffset() == 0 &&
++               payload->GetSize() >= udp.GetSerializedSize() &&
++               payload->PeekHeader(udp) != 0 && udp.GetDestinationPort() == m_routingPort;
++    }
++
++    std::vector<Ptr<SimpleNetDevice>> m_left;  ///< Left endpoint's neighborhood.
++    std::vector<Ptr<SimpleNetDevice>> m_right; ///< Right endpoint's neighborhood.
++    Mode m_mode{Mode::OFF};                    ///< Frame scope admitted by the tunnel.
++    Time m_tunnelDelay;                             ///< One-way tunnel delay.
++    uint16_t m_routingPort{0};                 ///< Native routing UDP port.
++    Counters m_counters;                       ///< Tunnel activity counters.
++};
++
++} // namespace ns3
++
++#endif
++
