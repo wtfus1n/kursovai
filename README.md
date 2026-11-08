@@ -4,7 +4,7 @@
 
 **NS-3.49 · Linux / WSL · 8 патчей · 20 контрольных прогонов**
 
-[Скачать ZIP](https://github.com/wtfus1n/kursovai/archive/refs/heads/main.zip) · [Патчи](#патчи) · [Быстрый старт](#быстрый-старт) · [Результаты](#результаты-проверок) · [Устройство реализации](#устройство-реализации)
+[Скачать ZIP](https://github.com/wtfus1n/kursovai/archive/refs/heads/oldmian.zip) · [Патчи](#патчи) · [Быстрый старт](#быстрый-старт) · [Результаты](patches/tests/results/README.md) · [Устройство реализации](#устройство-реализации)
 
 ## Патчи
 
@@ -25,7 +25,7 @@
 **1. Скачайте комплект и подготовьте копию с чёрной дырой AODV.**
 
 ```bash
-git clone https://github.com/wtfus1n/kursovai.git ns3-attacks
+git clone --branch oldmian https://github.com/wtfus1n/kursovai.git ns3-attacks
 cd ns3-attacks
 
 # Укажите путь к вашим чистым исходникам NS-3.49.
