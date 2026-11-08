@@ -11,16 +11,19 @@ using namespace ns3;
 int main(int argc, char** argv)
 {
     bool enabled = true;
+    bool delayedStart = false;
     double probability = 0.5;
     uint32_t seed = 1;
     uint64_t run = 1;
     CommandLine cmd(__FILE__);
     cmd.AddValue("enabled", "Enable the attack on the designated physical node", enabled);
     cmd.AddValue("probability", "Grayhole drop probability", probability);
+    cmd.AddValue("delayedStart", "Start grayhole packet dropping at 30 seconds", delayedStart);
     cmd.AddValue("seed", "RNG seed", seed);
     cmd.AddValue("run", "RNG run", run);
     cmd.Parse(argc, argv);
     const Time trafficStart = Seconds(20);
+    const Time dropStart = delayedStart ? Seconds(30) : trafficStart;
     RngSeedManager::SetSeed(seed);
     RngSeedManager::SetRun(run);
     RngSeedManager::ResetNextStreamIndex();
@@ -66,14 +69,14 @@ int main(int argc, char** argv)
         protocols.push_back(nodes.Get(i)->GetObject<Ipv4>()->GetRoutingProtocol()->GetObject<olsr::RoutingProtocol>());
     }
     protocols[2]->SetAttribute("AttackEnabled", BooleanValue(enabled));
-    // Let OLSR establish routes before the first measured packet and start dropping with it.
-    protocols[2]->SetAttribute("AttackStart", TimeValue(trafficStart));
+    protocols[2]->SetAttribute("AttackStart", TimeValue(dropStart));
     protocols[2]->SetAttribute("AttackDropProbability", DoubleValue(probability));
     olsr.AssignStreams(nodes, 100);
 
     PacketSinkHelper sink("ns3::UdpSocketFactory", InetSocketAddress(Ipv4Address::GetAny(), 9000));
     auto sinks = sink.Install(nodes.Get(4));
     sinks.Start(Seconds(0));
+    const auto target = DynamicCast<PacketSink>(sinks.Get(0));
     PacketSinkHelper localSink("ns3::UdpSocketFactory", InetSocketAddress(Ipv4Address::GetAny(), 9001));
     auto localSinks = localSink.Install(nodes.Get(2));
     localSinks.Start(Seconds(0));
@@ -91,6 +94,13 @@ int main(int argc, char** argv)
     auto localSource = localClient.Install(nodes.Get(0));
     localSource.Start(trafficStart);
     localSource.Stop(Seconds(50));
+    uint64_t receivedBefore = 0;
+    if (delayedStart)
+    {
+        Simulator::Schedule(dropStart, [&receivedBefore, target] {
+            receivedBefore = target->GetTotalRx() / 128;
+        });
+    }
     Simulator::Stop(Seconds(55));
     Simulator::Run();
     uint64_t routeFingerprint = 1469598103934665603ULL;
@@ -104,12 +114,20 @@ int main(int argc, char** argv)
         }
     }
     std::cout << "STATE routeFingerprint=" << routeFingerprint << std::endl;
-    auto delivered = DynamicCast<PacketSink>(sinks.Get(0))->GetTotalRx() / 128;
+    auto delivered = target->GetTotalRx() / 128;
+    const auto receivedAfter = delivered - receivedBefore;
     auto local = DynamicCast<PacketSink>(localSinks.Get(0))->GetTotalRx() / 128;
     std::cout << "RESULT attack=grayhole enabled=" << enabled << " probability=" << probability
               << " delivered=" << delivered << " local=" << local
               << " dataDrops=" << protocols[2]->GetAttackDataDrops()
-              << " controlDrops=" << protocols[2]->GetAttackControlDrops() << std::endl;
+              << " controlDrops=" << protocols[2]->GetAttackControlDrops();
+    if (delayedStart)
+    {
+        std::cout << " dropStart=" << dropStart.GetSeconds() << " receivedBefore=" << receivedBefore
+                  << " receivedAfter=" << receivedAfter;
+        NS_ABORT_MSG_IF(receivedBefore == 0, "Delayed test must deliver traffic before the drop window");
+    }
+    std::cout << std::endl;
     NS_ABORT_MSG_IF(local < 250, "Locally addressed traffic must survive the forwarding attack");
     if (!enabled || probability == 0)
     {
@@ -121,8 +139,8 @@ int main(int argc, char** argv)
         NS_ABORT_MSG_IF(protocols[2]->GetAttackDataDrops() == 0, "No actual transit packets dropped");
         NS_ABORT_MSG_IF(protocols[2]->GetAttackControlDrops() == 0, "No eligible MPR messages dropped");
         NS_ABORT_MSG_IF(delivered >= 290, "Attack had no observed delivery effect");
-        NS_ABORT_MSG_IF(probability == 1.0 && delivered != 0,
-                        "Full drop probability must block all measured transit traffic");
+        NS_ABORT_MSG_IF(probability == 1.0 && receivedAfter != 0,
+                        "Full drop probability must block transit delivery after the drop starts");
     }
     Simulator::Destroy();
     return 0;
