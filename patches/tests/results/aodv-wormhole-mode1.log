@@ -1,0 +1,13 @@
+[0/2] Re-checking globbed directories...
+ninja: no work to do.
+Node: 0; Time: +8s, Local time: +8s, AODV Routing table
+
+AODV Routing table
+Destination     Gateway         Interface       Flag            Expire          Hops
+10.1.1.2        10.1.1.2        10.1.1.1        UP              +12s            1
+10.1.1.255      10.1.1.255      10.1.1.1        UP              +9.2e+09s       1
+10.1.2.2        10.1.1.2        10.1.1.1        UP              +8.5s           3
+127.0.0.1       127.0.0.1       127.0.0.1       UP              +9.2e+09s       1
+
+
+RESULT mode=1 receivedBytes=6400 advertisedHops=3 hiddenControlHops=0 tunnelLinkTx=56

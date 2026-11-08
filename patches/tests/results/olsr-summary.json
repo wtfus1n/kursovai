@@ -1,0 +1,112 @@
+[
+  {
+    "attack": "blackhole",
+    "enabled": 0,
+    "probability": 0.5,
+    "routeFingerprint": 9554657073229614963,
+    "delivered": 300,
+    "local": 300,
+    "dataDrops": 0,
+    "controlDrops": 0
+  },
+  {
+    "attack": "blackhole",
+    "enabled": 1,
+    "probability": 0.5,
+    "routeFingerprint": 15847086914232839137,
+    "delivered": 100,
+    "local": 300,
+    "dataDrops": 52,
+    "controlDrops": 26
+  },
+  {
+    "attack": "grayhole",
+    "enabled": 0,
+    "probability": 0.5,
+    "routeFingerprint": 9554657073229614963,
+    "delivered": 300,
+    "local": 300,
+    "dataDrops": 0,
+    "controlDrops": 0
+  },
+  {
+    "attack": "grayhole",
+    "enabled": 1,
+    "probability": 0,
+    "routeFingerprint": 9554657073229614963,
+    "delivered": 300,
+    "local": 300,
+    "dataDrops": 0,
+    "controlDrops": 0
+  },
+  {
+    "attack": "grayhole",
+    "enabled": 1,
+    "probability": 0.5,
+    "routeFingerprint": 9554657073229614963,
+    "delivered": 204,
+    "local": 300,
+    "dataDrops": 94,
+    "controlDrops": 11
+  },
+  {
+    "attack": "grayhole",
+    "enabled": 1,
+    "probability": 1,
+    "routeFingerprint": 15847086914232839137,
+    "delivered": 100,
+    "local": 300,
+    "dataDrops": 41,
+    "controlDrops": 26
+  },
+  {
+    "attack": "sybil",
+    "enabled": 0,
+    "probability": 0.5,
+    "routeFingerprint": 7754950935706933655,
+    "fakeNeighbors": 0,
+    "totalNeighbors": 1,
+    "topology": 0,
+    "emitted": 0
+  },
+  {
+    "attack": "sybil",
+    "enabled": 1,
+    "probability": 0.5,
+    "routeFingerprint": 15633348635023610139,
+    "fakeNeighbors": 3,
+    "totalNeighbors": 4,
+    "topology": 3,
+    "emitted": 165
+  },
+  {
+    "attack": "wormhole",
+    "enabled": 0,
+    "probability": 0.5,
+    "routeFingerprint": 4283143513681209923,
+    "remoteNeighbors": 0,
+    "routes": 1,
+    "transfers": 0,
+    "replays": 0
+  },
+  {
+    "attack": "wormhole",
+    "enabled": 1,
+    "probability": 0.5,
+    "routeFingerprint": 11710413720373497075,
+    "remoteNeighbors": 1,
+    "routes": 3,
+    "transfers": 246,
+    "replays": 246
+  },
+  {
+    "attack": "pristine",
+    "enabled": 0,
+    "routeFingerprint": 9554657073229614963,
+    "probability": 0.5,
+    "delivered": 300,
+    "local": 300,
+    "dataDrops": 0,
+    "controlDrops": 0
+  }
+]

@@ -1,0 +1,2 @@
+STATE routeFingerprint=11728572523028587371
+RESULT attack=sybil enabled=1 fakeNeighbors=64 totalNeighbors=65 topology=64 emitted=3520

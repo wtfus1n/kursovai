@@ -1,0 +1,134 @@
+--- a/src/aodv/model/aodv-routing-protocol.cc
++++ b/src/aodv/model/aodv-routing-protocol.cc
+@@ -182,6 +182,25 @@
+             .SetParent<Ipv4RoutingProtocol>()
+             .SetGroupName("Aodv")
+             .AddConstructor<RoutingProtocol>()
++            .AddAttribute("SybilEnabled",
++                          "Send additional HELLO identities from this physical node.",
++                          BooleanValue(false),
++                          MakeBooleanAccessor(&RoutingProtocol::m_sybilEnabled),
++                          MakeBooleanChecker())
++            .AddAttribute("SybilIdentityCount",
++                          "Number of fictitious HELLO originator addresses.",
++                          UintegerValue(3),
++                          MakeUintegerAccessor(&RoutingProtocol::m_sybilIdentityCount),
++                          MakeUintegerChecker<uint32_t>(1, 256))
++            .AddAttribute("SybilFirstAddress",
++                          "First fictitious identity; the scenario must reserve the address range.",
++                          Ipv4AddressValue(Ipv4Address("10.250.0.1")),
++                          MakeIpv4AddressAccessor(&RoutingProtocol::m_sybilFirstAddress),
++                          MakeIpv4AddressChecker())
++            .AddTraceSource("SybilIdentityTx",
++                            "Fictitious identity accepted by the socket for HELLO transmission.",
++                            MakeTraceSourceAccessor(&RoutingProtocol::m_sybilIdentityTx),
++                            "ns3::TracedCallback::Ipv4Address")
+             .AddAttribute("HelloInterval",
+                           "HELLO messages emission interval.",
+                           TimeValue(Seconds(1)),
+@@ -1972,6 +1991,19 @@
+ }
+ 
+ void
++RoutingProtocol::SendSybilHello(Ptr<Socket> socket,
++                                Ptr<Packet> packet,
++                                Ipv4Address destination,
++                                Ipv4Address identity)
++{
++    if (m_sybilEnabled && m_ipv4 &&
++        socket->SendTo(packet, 0, InetSocketAddress(destination, AODV_PORT)) >= 0)
++    {
++        m_sybilIdentityTx(identity);
++    }
++}
++
++void
+ RoutingProtocol::SendHello()
+ {
+     NS_LOG_FUNCTION(this);
+@@ -2010,6 +2042,30 @@
+         }
+         Time jitter = MilliSeconds(m_uniformRandomVariable->GetInteger(0, 10));
+         Simulator::Schedule(jitter, &RoutingProtocol::SendTo, this, socket, packet, destination);
++        if (m_sybilEnabled)
++        {
++            for (uint32_t identity = 0; identity < m_sybilIdentityCount; ++identity)
++            {
++                Ipv4Address fake(m_sybilFirstAddress.Get() + identity);
++                RrepHeader forged(0,
++                                  0,
++                                  fake,
++                                  m_seqNo,
++                                  fake,
++                                  Time(m_allowedHelloLoss * m_helloInterval));
++                Ptr<Packet> sybilPacket = Create<Packet>();
++                sybilPacket->AddPacketTag(tag);
++                sybilPacket->AddHeader(forged);
++                sybilPacket->AddHeader(tHeader);
++                Simulator::Schedule(jitter + MilliSeconds(identity + 1),
++                                    &RoutingProtocol::SendSybilHello,
++                                    Ptr<RoutingProtocol>(this),
++                                    socket,
++                                    sybilPacket,
++                                    destination,
++                                    fake);
++            }
++        }
+     }
+ }
+ 
+@@ -2268,6 +2324,20 @@
+ void
+ RoutingProtocol::DoInitialize()
+ {
++    if (m_sybilEnabled)
++    {
++        NS_ABORT_MSG_IF(!m_enableHello, "Sybil HELLO model requires EnableHello=true");
++        uint64_t first = m_sybilFirstAddress.Get();
++        uint64_t last = first + m_sybilIdentityCount - 1;
++        NS_ABORT_MSG_IF(first < 0x01000000ULL || last >= 0xe0000000ULL ||
++                            (first <= 0x7fffffffULL && last >= 0x7f000000ULL),
++                        "Sybil identity range must contain ordinary unicast IPv4 addresses");
++        for (uint32_t identity = 0; identity < m_sybilIdentityCount; ++identity)
++        {
++            NS_ABORT_MSG_IF(IsMyOwnAddress(Ipv4Address(first + identity)),
++                            "Sybil identity range overlaps the attacker's real interface");
++        }
++    }
+     NS_LOG_FUNCTION(this);
+     NS_ABORT_MSG_IF(m_ttlStart > m_netDiameter,
+                     "AODV: configuration error, TtlStart ("
+--- a/src/aodv/model/aodv-routing-protocol.h
++++ b/src/aodv/model/aodv-routing-protocol.h
+@@ -28,6 +28,7 @@
+ #include "ns3/node.h"
+ #include "ns3/output-stream-wrapper.h"
+ #include "ns3/random-variable-stream.h"
++#include "ns3/traced-callback.h"
+ 
+ #include <map>
+ 
+@@ -461,6 +462,23 @@
+      */
+     void SendTo(Ptr<Socket> socket, Ptr<Packet> packet, Ipv4Address destination);
+ 
++    /**
++     * Send a pending Sybil HELLO if the attack is still enabled.
++     * @param socket socket for the outgoing interface
++     * @param packet serialized AODV packet
++     * @param destination broadcast address of the outgoing interface
++     * @param identity identity advertised in the HELLO
++     */
++    void SendSybilHello(Ptr<Socket> socket,
++                        Ptr<Packet> packet,
++                        Ipv4Address destination,
++                        Ipv4Address identity);
++
++    bool m_sybilEnabled{false}; ///< Whether fake HELLO identities are enabled.
++    uint32_t m_sybilIdentityCount{3}; ///< Number of additional identities per HELLO.
++    Ipv4Address m_sybilFirstAddress; ///< First address of the scenario-reserved identity range.
++    TracedCallback<Ipv4Address> m_sybilIdentityTx; ///< Identity advertised by a forged HELLO.
++
+     /// Hello timer
+     Timer m_htimer;
+     /// Schedule next send of hello message

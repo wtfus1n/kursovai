@@ -1,0 +1,260 @@
+--- a/src/olsr/model/olsr-routing-protocol.cc
++++ b/src/olsr/model/olsr-routing-protocol.cc
+@@ -26,6 +26,10 @@
+ #include "olsr-repositories.h"
+ 
+ #include "ns3/boolean.h"
++#include "ns3/tag.h"
++#include "ns3/ipv4-raw-socket-factory.h"
++#include "ns3/udp-header.h"
++
+ #include "ns3/enum.h"
+ #include "ns3/inet-socket-address.h"
+ #include "ns3/ipv4-header.h"
+@@ -170,6 +174,25 @@
+         return (os << "Unknown neighbor type");
+     }
+ }
++
++
++/** Simulator-only marker preventing out-of-band replay loops; not serialized on the wire. */
++class WormholeReplayTag : public Tag
++{
++  public:
++    /** @return Runtime type of this packet marker. */
++    static TypeId GetTypeId()
++    {
++        static TypeId tid = TypeId("ns3::olsr::WormholeReplayTag")
++                                .SetParent<Tag>().AddConstructor<WormholeReplayTag>();
++        return tid;
++    }
++    TypeId GetInstanceTypeId() const override { return GetTypeId(); }
++    uint32_t GetSerializedSize() const override { return 1; }
++    void Serialize(TagBuffer buffer) const override { buffer.WriteU8(1); }
++    void Deserialize(TagBuffer buffer) override { (void)buffer.ReadU8(); }
++    void Print(std::ostream& os) const override { os << "wormhole-replay"; }
++};
+ 
+ /********** OLSR class **********/
+ 
+@@ -220,6 +243,12 @@
+                                           "high",
+                                           Willingness::ALWAYS,
+                                           "always"))
++            .AddAttribute("WormholeEnabled", "Enable the configured out-of-band peer in this simulation.",
++                          BooleanValue(false), MakeBooleanAccessor(&RoutingProtocol::m_wormholeEnabled),
++                          MakeBooleanChecker())
++            .AddAttribute("WormholeDelay", "One-way out-of-band propagation delay.",
++                          TimeValue(MilliSeconds(1)), MakeTimeAccessor(&RoutingProtocol::m_wormholeDelay),
++                          MakeTimeChecker(NanoSeconds(1)))
+             .AddTraceSource("Rx",
+                             "Receive OLSR packet.",
+                             MakeTraceSourceAccessor(&RoutingProtocol::m_rxPacketTrace),
+@@ -279,6 +308,7 @@
+ void
+ RoutingProtocol::DoDispose()
+ {
++    m_wormholePeer = nullptr;
+     m_ipv4 = nullptr;
+     m_hnaRoutingTable = nullptr;
+     m_routingTableAssociation = nullptr;
+@@ -528,6 +558,11 @@
+     }
+ 
+     m_rxPacketTrace(olsrPacketHeader, messages);
++    WormholeReplayTag replay;
++    if (!receivedPacket->PeekPacketTag(replay))
++    {
++        TransferToWormhole(messages, senderIfaceAddr);
++    }
+ 
+     for (auto messageIter = messages.begin(); messageIter != messages.end(); messageIter++)
+     {
+@@ -1665,7 +1700,10 @@
+     {
+         Ptr<Packet> pkt = packet->Copy();
+         Ipv4Address bcast = i->second.GetLocal().GetSubnetDirectedBroadcast(i->second.GetMask());
+-        i->first->SendTo(pkt, 0, InetSocketAddress(bcast, OLSR_PORT_NUMBER));
++        if (i->first->SendTo(pkt, 0, InetSocketAddress(bcast, OLSR_PORT_NUMBER)) > 0)
++        {
++            TransferToWormhole(containedMessages, i->second.GetLocal());
++        }
+     }
+ }
+ 
+@@ -3224,3 +3262,134 @@
+ 
+ } // namespace olsr
+ } // namespace ns3
++
++namespace ns3::olsr
++{
++void
++RoutingProtocol::SetWormholePeer(Ptr<RoutingProtocol> peer)
++{
++    NS_ABORT_MSG_IF(peer == this, "A wormhole needs two distinct protocol objects");
++    m_wormholePeer = peer;
++}
++
++void
++RoutingProtocol::TransferToWormhole(const MessageList& messages, Ipv4Address source)
++{
++    if (!m_wormholeEnabled || !m_wormholePeer || !m_wormholePeer->m_wormholeEnabled)
++    {
++        return;
++    }
++    auto peerNode = m_wormholePeer->GetObject<Node>();
++    if (!peerNode)
++    {
++        return;
++    }
++    MessageList selected;
++    for (const auto& message : messages)
++    {
++        if (message.GetMessageType() == MessageHeader::HELLO_MESSAGE ||
++            message.GetMessageType() == MessageHeader::TC_MESSAGE)
++        {
++            auto key = std::make_pair(message.GetOriginatorAddress(), message.GetMessageSequenceNumber());
++            auto found = m_wormholeSeen.find(key);
++            if (found == m_wormholeSeen.end() || found->second <= Simulator::Now())
++            {
++                m_wormholeSeen[key] = Simulator::Now() + Seconds(30);
++                selected.push_back(message);
++            }
++        }
++    }
++    for (auto it = m_wormholeSeen.begin(); it != m_wormholeSeen.end();)
++    {
++        if (it->second <= Simulator::Now())
++        {
++            it = m_wormholeSeen.erase(it);
++        }
++        else
++        {
++            ++it;
++        }
++    }
++    if (!selected.empty())
++    {
++        ++m_wormholeTransfers;
++        Simulator::ScheduleWithContext(peerNode->GetId(),
++                                       m_wormholeDelay,
++                                       &RoutingProtocol::ReplayWormhole,
++                                       m_wormholePeer,
++                                       selected,
++                                       source);
++    }
++}
++
++void
++RoutingProtocol::ReplayWormhole(MessageList messages, Ipv4Address source)
++{
++    if (!m_wormholeEnabled || !m_ipv4)
++    {
++        return;
++    }
++    m_wormholeReplays += SendSpoofedMessages(messages, source);
++}
++
++uint32_t
++RoutingProtocol::SendSpoofedMessages(const MessageList& messages, Ipv4Address source)
++{
++    uint32_t submissions = 0;
++    for (const auto& item : m_sendSockets)
++    {
++        const int32_t interface = m_ipv4->GetInterfaceForAddress(item.second.GetLocal());
++        if (interface < 0 || !m_ipv4->IsUp(interface))
++        {
++            continue;
++        }
++        Ptr<Packet> packet = Create<Packet>();
++        for (const auto& message : messages)
++        {
++            Ptr<Packet> part = Create<Packet>();
++            part->AddHeader(message);
++            packet->AddAtEnd(part);
++        }
++        PacketHeader olsrHeader;
++        olsrHeader.SetPacketLength(olsrHeader.GetSerializedSize() + packet->GetSize());
++        olsrHeader.SetPacketSequenceNumber(GetPacketSequenceNumber());
++        packet->AddHeader(olsrHeader);
++        Ipv4Address broadcast = item.second.GetLocal().GetSubnetDirectedBroadcast(item.second.GetMask());
++        UdpHeader udp;
++        udp.SetSourcePort(OLSR_PORT_NUMBER);
++        udp.SetDestinationPort(OLSR_PORT_NUMBER);
++        if (Node::ChecksumEnabled())
++        {
++            udp.EnableChecksums();
++            udp.InitializeChecksum(source, broadcast, 17);
++        }
++        packet->AddHeader(udp);
++        Ipv4Header ip;
++        ip.SetSource(source);
++        ip.SetDestination(broadcast);
++        ip.SetProtocol(17);
++        ip.SetTtl(1);
++        ip.SetIdentification(olsrHeader.GetPacketSequenceNumber());
++        ip.SetPayloadSize(packet->GetSize());
++        if (Node::ChecksumEnabled())
++        {
++            ip.EnableChecksum();
++        }
++        packet->AddHeader(ip);
++        packet->AddPacketTag(WormholeReplayTag());
++        Ptr<Socket> socket = Socket::CreateSocket(GetObject<Node>(), Ipv4RawSocketFactory::GetTypeId());
++        socket->SetAttribute("IpHeaderInclude", BooleanValue(true));
++        socket->SetAttribute("Protocol", UintegerValue(17));
++        socket->SetAllowBroadcast(true);
++        socket->BindToNetDevice(m_ipv4->GetNetDevice(interface));
++        if (socket->SendTo(packet, 0, InetSocketAddress(broadcast, 0)) > 0)
++        {
++            ++submissions;
++            m_txPacketTrace(olsrHeader, messages);
++        }
++        socket->Close();
++    }
++    return submissions;
++}
++
++}
+--- a/src/olsr/model/olsr-routing-protocol.h
++++ b/src/olsr/model/olsr-routing-protocol.h
+@@ -154,6 +154,13 @@
+      * @return the number of stream indices assigned by this model
+      */
+     int64_t AssignStreams(int64_t stream);
++    /** @param peer The other endpoint of the simulated out-of-band link. */
++    void SetWormholePeer(Ptr<RoutingProtocol> peer);
++    /** @return Packets transferred to the other endpoint. */
++    uint64_t GetWormholeTransfers() const { return m_wormholeTransfers; }
++    /** @return Replay packets accepted for transmission on this endpoint's interfaces. */
++    uint64_t GetWormholeReplays() const { return m_wormholeReplays; }
++
+ 
+     /**
+      * TracedCallback signature for Packet transmit and receive events.
+@@ -250,6 +257,24 @@
+     Time m_midInterval;        //!< MID messages' emission interval.
+     Time m_hnaInterval;        //!< HNA messages' emission interval.
+     Willingness m_willingness; //!< Willingness for forwarding packets on behalf of other nodes.
++
++    /** @param messages Heard messages. @param source Original IP sender. */
++    void TransferToWormhole(const MessageList& messages, Ipv4Address source);
++    /** @param messages Tunneled messages. @param source Original IP sender. */
++    void ReplayWormhole(MessageList messages, Ipv4Address source);
++    /**
++     * Submit replay packets on active interfaces.
++     * @param messages OLSR messages to replay.
++     * @param source Original IPv4 source.
++     * @return Number of interface submissions accepted by the raw socket.
++     */
++    uint32_t SendSpoofedMessages(const MessageList& messages, Ipv4Address source);
++    bool m_wormholeEnabled{false}; ///< Out-of-band channel enabled on this endpoint.
++    Time m_wormholeDelay; ///< One-way abstract tunnel delay.
++    Ptr<RoutingProtocol> m_wormholePeer; ///< Peer endpoint; released in DoDispose.
++    std::map<std::pair<Ipv4Address, uint16_t>, Time> m_wormholeSeen; ///< Expiring replay cache.
++    uint64_t m_wormholeTransfers{0}; ///< Out-of-band transfers.
++    uint64_t m_wormholeReplays{0}; ///< Radio replays from the peer.
+ 
+     OlsrState m_state; //!< Internal state with all needed data structs.
+     Ptr<Ipv4> m_ipv4;  //!< IPv4 object the routing is linked to.

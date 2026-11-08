@@ -1,0 +1,130 @@
+--- a/src/aodv/model/aodv-routing-protocol.cc
++++ b/src/aodv/model/aodv-routing-protocol.cc
+@@ -182,6 +182,20 @@
+             .SetParent<Ipv4RoutingProtocol>()
+             .SetGroupName("Aodv")
+             .AddConstructor<RoutingProtocol>()
++            .AddAttribute("WormholeEnabled",
++                          "Hide the out-of-band tunnel hop in AODV control messages.",
++                          BooleanValue(false),
++                          MakeBooleanAccessor(&RoutingProtocol::m_wormholeEnabled),
++                          MakeBooleanChecker())
++            .AddAttribute("WormholeInterface",
++                          "IPv4 interface index of the scenario-provided out-of-band link.",
++                          UintegerValue(0),
++                          MakeUintegerAccessor(&RoutingProtocol::m_wormholeInterface),
++                          MakeUintegerChecker<uint32_t>())
++            .AddTraceSource("WormholeControl",
++                            "Message type, received hop count, and advertised hop count.",
++                            MakeTraceSourceAccessor(&RoutingProtocol::m_wormholeControl),
++                            "ns3::TracedCallback::Uint8Uint8Uint8")
+             .AddAttribute("HelloInterval",
+                           "HELLO messages emission interval.",
+                           TimeValue(Seconds(1)),
+@@ -1345,6 +1359,12 @@
+ 
+     // Increment RREQ hop count
+     uint8_t hop = rreqHeader.GetHopCount() + 1;
++    if (m_wormholeEnabled &&
++        m_ipv4->GetInterfaceForAddress(receiver) == static_cast<int32_t>(m_wormholeInterface))
++    {
++        hop = rreqHeader.GetHopCount();
++        m_wormholeControl(AODVTYPE_RREQ, rreqHeader.GetHopCount(), hop);
++    }
+     rreqHeader.SetHopCount(hop);
+ 
+     /*
+@@ -1481,19 +1501,20 @@
+ 
+     SocketIpTtlTag tag;
+     p->RemovePacketTag(tag);
+-    if (tag.GetTtl() < 2)
+-    {
+-        NS_LOG_DEBUG("TTL exceeded. Drop RREQ origin " << src << " destination " << dst);
+-        return;
+-    }
+-
+     for (auto j = m_socketAddresses.begin(); j != m_socketAddresses.end(); ++j)
+     {
+         Ptr<Socket> socket = j->first;
+         Ipv4InterfaceAddress iface = j->second;
++        bool tunnel = m_wormholeEnabled &&
++                      m_ipv4->GetInterfaceForAddress(iface.GetLocal()) ==
++                          static_cast<int32_t>(m_wormholeInterface);
++        if (tag.GetTtl() == 0 || (tag.GetTtl() < 2 && !tunnel))
++        {
++            continue;
++        }
+         Ptr<Packet> packet = Create<Packet>();
+         SocketIpTtlTag ttl;
+-        ttl.SetTtl(tag.GetTtl() - 1);
++        ttl.SetTtl(tag.GetTtl() - (tunnel ? 0 : 1));
+         packet->AddPacketTag(ttl);
+         packet->AddHeader(rreqHeader);
+         TypeHeader tHeader(AODVTYPE_RREQ);
+@@ -1641,6 +1662,12 @@
+     NS_LOG_LOGIC("Route destination " << dst << " Route origin " << rrepHeader.GetOrigin());
+ 
+     uint8_t hop = rrepHeader.GetHopCount() + 1;
++    if (m_wormholeEnabled && dst != rrepHeader.GetOrigin() &&
++        m_ipv4->GetInterfaceForAddress(receiver) == static_cast<int32_t>(m_wormholeInterface))
++    {
++        hop = rrepHeader.GetHopCount();
++        m_wormholeControl(AODVTYPE_RREP, rrepHeader.GetHopCount(), hop);
++    }
+     rrepHeader.SetHopCount(hop);
+ 
+     // If RREP is Hello message
+@@ -1752,7 +1779,10 @@
+     }
+     SocketIpTtlTag tag;
+     p->RemovePacketTag(tag);
+-    if (tag.GetTtl() < 2)
++    bool tunnel = m_wormholeEnabled &&
++                  m_ipv4->GetInterfaceForAddress(toOrigin.GetInterface().GetLocal()) ==
++                      static_cast<int32_t>(m_wormholeInterface);
++    if (tag.GetTtl() == 0 || (tag.GetTtl() < 2 && !tunnel))
+     {
+         NS_LOG_DEBUG("TTL exceeded. Drop RREP destination " << dst << " origin "
+                                                             << rrepHeader.GetOrigin());
+@@ -1761,7 +1791,7 @@
+ 
+     Ptr<Packet> packet = Create<Packet>();
+     SocketIpTtlTag ttl;
+-    ttl.SetTtl(tag.GetTtl() - 1);
++    ttl.SetTtl(tag.GetTtl() - (tunnel ? 0 : 1));
+     packet->AddPacketTag(ttl);
+     packet->AddHeader(rrepHeader);
+     TypeHeader tHeader(AODVTYPE_RREP);
+@@ -2268,6 +2298,10 @@
+ void
+ RoutingProtocol::DoInitialize()
+ {
++    NS_ABORT_MSG_IF(m_wormholeEnabled &&
++                        (m_wormholeInterface == 0 ||
++                         m_wormholeInterface >= m_ipv4->GetNInterfaces()),
++                    "WormholeInterface must name an existing non-loopback IPv4 interface");
+     NS_LOG_FUNCTION(this);
+     NS_ABORT_MSG_IF(m_ttlStart > m_netDiameter,
+                     "AODV: configuration error, TtlStart ("
+--- a/src/aodv/model/aodv-routing-protocol.h
++++ b/src/aodv/model/aodv-routing-protocol.h
+@@ -28,6 +28,7 @@
+ #include "ns3/node.h"
+ #include "ns3/output-stream-wrapper.h"
+ #include "ns3/random-variable-stream.h"
++#include "ns3/traced-callback.h"
+ 
+ #include <map>
+ 
+@@ -461,6 +462,10 @@
+      */
+     void SendTo(Ptr<Socket> socket, Ptr<Packet> packet, Ipv4Address destination);
+ 
++    bool m_wormholeEnabled{false}; ///< Whether the hidden-hop model is enabled.
++    uint32_t m_wormholeInterface{0}; ///< Scenario-provided out-of-band IPv4 interface.
++    TracedCallback<uint8_t, uint8_t, uint8_t> m_wormholeControl; ///< Hidden control-hop events.
++
+     /// Hello timer
+     Timer m_htimer;
+     /// Schedule next send of hello message

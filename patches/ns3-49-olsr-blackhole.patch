@@ -1,0 +1,111 @@
+--- a/src/olsr/model/olsr-routing-protocol.cc
++++ b/src/olsr/model/olsr-routing-protocol.cc
+@@ -220,6 +220,15 @@
+                                           "high",
+                                           Willingness::ALWAYS,
+                                           "always"))
++            .AddAttribute("AttackEnabled", "Enable the simulation-only forwarding attack.",
++                          BooleanValue(false), MakeBooleanAccessor(&RoutingProtocol::m_attackEnabled),
++                          MakeBooleanChecker())
++            .AddAttribute("AttackStart", "Time at which malicious forwarding starts.",
++                          TimeValue(Seconds(0)), MakeTimeAccessor(&RoutingProtocol::m_attackStart),
++                          MakeTimeChecker(Seconds(0)))
++            .AddTraceSource("AttackDrop", "Transit data packet deliberately consumed by the attacker.",
++                            MakeTraceSourceAccessor(&RoutingProtocol::m_attackDropTrace),
++                            "ns3::Packet::TracedCallback")
+             .AddTraceSource("Rx",
+                             "Receive OLSR packet.",
+                             MakeTraceSourceAccessor(&RoutingProtocol::m_rxPacketTrace),
+@@ -1600,12 +1609,19 @@
+             m_state.FindMprSelectorTuple(GetMainAddress(senderAddress));
+         if (mprselTuple != nullptr)
+         {
+-            olsrMessage.SetTimeToLive(olsrMessage.GetTimeToLive() - 1);
+-            olsrMessage.SetHopCount(olsrMessage.GetHopCount() + 1);
+-            // We have to introduce a random delay to avoid
+-            // synchronization with neighbors.
+-            QueueMessage(olsrMessage, JITTER);
+-            retransmitted = true;
++            if (ShouldAttackDrop())
++            {
++                ++m_attackControlDrops;
++                // Mark deliberately consumed messages to suppress a second forwarding chance.
++                retransmitted = true;
++            }
++            else
++            {
++                olsrMessage.SetTimeToLive(olsrMessage.GetTimeToLive() - 1);
++                olsrMessage.SetHopCount(olsrMessage.GetHopCount() + 1);
++                QueueMessage(olsrMessage, JITTER);
++                retransmitted = true;
++            }
+         }
+     }
+ 
+@@ -1719,7 +1735,7 @@
+     olsr::MessageHeader::Hello& hello = msg.GetHello();
+ 
+     hello.SetHTime(m_helloInterval);
+-    hello.willingness = m_willingness;
++    hello.willingness = m_attackEnabled ? Willingness::ALWAYS : m_willingness;
+ 
+     std::vector<olsr::MessageHeader::Hello::LinkMessage>& linkMessages = hello.linkMessages;
+ 
+@@ -2979,6 +2995,14 @@
+         }
+     }
+ 
++    if (!dst.IsMulticast() && !dst.IsBroadcast() && ShouldAttackDrop())
++    {
++        ++m_attackDataDrops;
++        m_attackDropTrace(p);
++        // Consume silently: returning false would let Ipv4ListRouting try another protocol.
++        return true;
++    }
++
+     NS_LOG_LOGIC("Forward packet");
+     // Forwarding
+     Ptr<Ipv4Route> rtentry;
+@@ -3224,3 +3248,12 @@
+ 
+ } // namespace olsr
+ } // namespace ns3
++
++namespace ns3::olsr
++{
++bool
++RoutingProtocol::ShouldAttackDrop()
++{
++    return m_attackEnabled && Simulator::Now() >= m_attackStart && (true);
++}
++} // namespace ns3::olsr
+--- a/src/olsr/model/olsr-routing-protocol.h
++++ b/src/olsr/model/olsr-routing-protocol.h
+@@ -155,6 +155,12 @@
+      */
+     int64_t AssignStreams(int64_t stream);
+ 
++    /** @return Number of deliberately consumed transit data packets. */
++    uint64_t GetAttackDataDrops() const { return m_attackDataDrops; }
++    /** @return Number of eligible control messages deliberately not forwarded. */
++    uint64_t GetAttackControlDrops() const { return m_attackControlDrops; }
++
++
+     /**
+      * TracedCallback signature for Packet transmit and receive events.
+      *
+@@ -250,6 +256,14 @@
+     Time m_midInterval;        //!< MID messages' emission interval.
+     Time m_hnaInterval;        //!< HNA messages' emission interval.
+     Willingness m_willingness; //!< Willingness for forwarding packets on behalf of other nodes.
++
++    /** @return Whether this eligible forwarding item is deliberately dropped. */
++    bool ShouldAttackDrop();
++    bool m_attackEnabled{false}; ///< Enable the forwarding attack on this node.
++    Time m_attackStart; ///< Start of malicious forwarding.
++    uint64_t m_attackDataDrops{0}; ///< Deliberately dropped transit data packets.
++    uint64_t m_attackControlDrops{0}; ///< Deliberately dropped eligible control messages.
++    TracedCallback<Ptr<const Packet>> m_attackDropTrace; ///< Deliberate data packet drop.
+ 
+     OlsrState m_state; //!< Internal state with all needed data structs.
+     Ptr<Ipv4> m_ipv4;  //!< IPv4 object the routing is linked to.

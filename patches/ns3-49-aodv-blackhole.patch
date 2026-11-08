@@ -1,0 +1,127 @@
+--- a/src/aodv/model/aodv-routing-protocol.cc
++++ b/src/aodv/model/aodv-routing-protocol.cc
+@@ -323,6 +323,24 @@
+                           MakeBooleanAccessor(&RoutingProtocol::SetBroadcastEnable,
+                                               &RoutingProtocol::GetBroadcastEnable),
+                           MakeBooleanChecker())
++            .AddAttribute("IsMalicious",
++                          "Enable forged RREPs and silent dropping of transit unicast packets.",
++                          BooleanValue(false),
++                          MakeBooleanAccessor(&RoutingProtocol::m_isMalicious),
++                          MakeBooleanChecker())
++            .AddAttribute("AttackSequenceBoost",
++                          "Positive sequence increment used by forged replies (serial arithmetic).",
++                          UintegerValue(100),
++                          MakeUintegerAccessor(&RoutingProtocol::m_attackSequenceBoost),
++                          MakeUintegerChecker<uint32_t>(1, 0x7fffffff))
++            .AddTraceSource("AttackDrop",
++                            "A transit unicast packet deliberately consumed by the attacker.",
++                            MakeTraceSourceAccessor(&RoutingProtocol::m_attackDrop),
++                            "ns3::aodv::RoutingProtocol::AttackDropCallback")
++            .AddTraceSource("ForgedReply",
++                            "A forged RREP destination and advertised sequence number.",
++                            MakeTraceSourceAccessor(&RoutingProtocol::m_forgedReply),
++                            "ns3::aodv::RoutingProtocol::ForgedReplyCallback")
+             .AddAttribute("UniformRv",
+                           "Access to the underlying UniformRandomVariable",
+                           StringValue("ns3::UniformRandomVariable"),
+@@ -625,6 +643,12 @@
+         return true;
+     }
+ 
++    if (m_isMalicious)
++    {
++        m_attackDrop(p, header);
++        return true; // Consumed deliberately: do not fall back to another routing protocol.
++    }
++
+     // Forwarding
+     return Forwarding(p, header, ucb, ecb);
+ }
+@@ -1439,6 +1463,12 @@
+         SendReply(rreqHeader, toOrigin);
+         return;
+     }
++    if (m_isMalicious)
++    {
++        m_routingTable.LookupRoute(origin, toOrigin);
++        SendAttackReply(rreqHeader, toOrigin);
++        return;
++    }
+     /*
+      * (ii) or it has an active route to the destination, the destination sequence number in the
+      * node's existing route table entry for the destination is valid and greater than or equal to
+@@ -1515,6 +1545,32 @@
+                             socket,
+                             packet,
+                             destination);
++    }
++}
++
++void
++RoutingProtocol::SendAttackReply(const RreqHeader& request, const RoutingTableEntry& reverse)
++{
++    uint32_t sequence = request.GetDstSeqno();
++    RoutingTableEntry known;
++    if (m_routingTable.LookupRoute(request.GetDst(), known) && known.GetValidSeqNo() &&
++        static_cast<int32_t>(known.GetSeqNo() - sequence) > 0)
++    {
++        sequence = known.GetSeqNo();
++    }
++    sequence += m_attackSequenceBoost;
++    RrepHeader reply(0, 1, request.GetDst(), sequence, request.GetOrigin(), m_myRouteTimeout);
++    Ptr<Packet> packet = Create<Packet>();
++    SocketIpTtlTag ttl;
++    ttl.SetTtl(reverse.GetHop());
++    packet->AddPacketTag(ttl);
++    packet->AddHeader(reply);
++    packet->AddHeader(TypeHeader(AODVTYPE_RREP));
++    Ptr<Socket> socket = FindSocketWithInterfaceAddress(reverse.GetInterface());
++    NS_ASSERT(socket);
++    if (socket->SendTo(packet, 0, InetSocketAddress(reverse.GetNextHop(), AODV_PORT)) >= 0)
++    {
++        m_forgedReply(request.GetDst(), sequence);
+     }
+ }
+ 
+--- a/src/aodv/model/aodv-routing-protocol.h
++++ b/src/aodv/model/aodv-routing-protocol.h
+@@ -28,6 +28,7 @@
+ #include "ns3/node.h"
+ #include "ns3/output-stream-wrapper.h"
+ #include "ns3/random-variable-stream.h"
++#include "ns3/traced-callback.h"
+ 
+ #include <map>
+ 
+@@ -53,6 +54,11 @@
+      */
+     static TypeId GetTypeId();
+     static const uint32_t AODV_PORT;
++
++    /** @brief Signature for the AttackDrop trace. */
++    typedef void (*AttackDropCallback)(Ptr<const Packet>, const Ipv4Header&);
++    /** @brief Signature for the ForgedReply trace. */
++    typedef void (*ForgedReplyCallback)(Ipv4Address, uint32_t);
+ 
+     /// constructor
+     RoutingProtocol();
+@@ -250,6 +256,18 @@
+     bool m_enableHello;      ///< Indicates whether a hello messages enable
+     bool m_enableBroadcast;  ///< Indicates whether a a broadcast data packets forwarding enable
+ 
++    bool m_isMalicious{false}; ///< Enable route attraction and transit packet dropping.
++    uint32_t m_attackSequenceBoost{100}; ///< Sequence number increment in forged replies.
++    TracedCallback<Ptr<const Packet>, const Ipv4Header&> m_attackDrop; ///< Silently dropped transit packet.
++    TracedCallback<Ipv4Address, uint32_t> m_forgedReply; ///< Destination and sequence number of a forged RREP.
++
++    /**
++     * Send a forged reply using the already established reverse route.
++     * @param request received route request
++     * @param reverse reverse route to the request originator
++     */
++    void SendAttackReply(const RreqHeader& request, const RoutingTableEntry& reverse);
++
+     /// IP protocol
+     Ptr<Ipv4> m_ipv4;
+     /// Raw unicast socket per each IP interface, map socket -> iface address (IP + mask)

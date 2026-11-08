@@ -1,0 +1,197 @@
+--- a/src/olsr/model/olsr-routing-protocol.cc
++++ b/src/olsr/model/olsr-routing-protocol.cc
+@@ -26,6 +26,10 @@
+ #include "olsr-repositories.h"
+ 
+ #include "ns3/boolean.h"
++#include "ns3/ipv4-raw-socket-factory.h"
++#include "ns3/node-list.h"
++#include "ns3/udp-header.h"
++
+ #include "ns3/enum.h"
+ #include "ns3/inet-socket-address.h"
+ #include "ns3/ipv4-header.h"
+@@ -220,6 +224,16 @@
+                                           "high",
+                                           Willingness::ALWAYS,
+                                           "always"))
++            .AddAttribute("SybilEnabled", "Emit additional simulated OLSR identities.",
++                          BooleanValue(false), MakeBooleanAccessor(&RoutingProtocol::m_sybilEnabled),
++                          MakeBooleanChecker())
++            .AddAttribute("SybilCount", "Number of distinct fake identities (no real address may overlap).",
++                          UintegerValue(3), MakeUintegerAccessor(&RoutingProtocol::m_sybilCount),
++                          MakeUintegerChecker<uint32_t>(1, 64))
++            .AddAttribute("SybilAddressBase", "First unused fake unicast address; reserve consecutive addresses.",
++                          Ipv4AddressValue(Ipv4Address("10.254.0.1")),
++                          MakeIpv4AddressAccessor(&RoutingProtocol::m_sybilAddressBase),
++                          MakeIpv4AddressChecker())
+             .AddTraceSource("Rx",
+                             "Receive OLSR packet.",
+                             MakeTraceSourceAccessor(&RoutingProtocol::m_rxPacketTrace),
+@@ -1811,6 +1825,28 @@
+     NS_LOG_DEBUG("OLSR HELLO message size: " << int(msg.GetSerializedSize()) << " (with "
+                                              << int(linkMessages.size()) << " link messages)");
+     QueueMessage(msg, JITTER);
++    if (m_sybilEnabled)
++    {
++        ValidateSybilRange();
++        for (uint32_t i = 0; i < m_sybilCount; ++i)
++        {
++            Ipv4Address fake(m_sybilAddressBase.Get() + i);
++            MessageHeader fakeHello = msg;
++            fakeHello.SetOriginatorAddress(fake);
++            fakeHello.SetMessageSequenceNumber(GetMessageSequenceNumber());
++            fakeHello.GetHello().willingness = Willingness::ALWAYS;
++            MessageHeader fakeTc;
++            fakeTc.SetVTime(OLSR_TOP_HOLD_TIME);
++            fakeTc.SetOriginatorAddress(fake);
++            fakeTc.SetTimeToLive(255);
++            fakeTc.SetHopCount(0);
++            fakeTc.SetMessageSequenceNumber(GetMessageSequenceNumber());
++            auto& tc = fakeTc.GetTc();
++            tc.ansn = m_ansn;
++            tc.neighborAddresses.push_back(m_mainAddress);
++            m_sybilPackets += SendSpoofedMessages({fakeHello, fakeTc}, fake);
++        }
++    }
+ }
+ 
+ void
+@@ -3224,3 +3260,104 @@
+ 
+ } // namespace olsr
+ } // namespace ns3
++
++namespace ns3::olsr
++{
++
++void
++RoutingProtocol::ValidateSybilRange() const
++{
++    const uint64_t first = m_sybilAddressBase.Get();
++    const uint64_t last = first + m_sybilCount - 1;
++    NS_ABORT_MSG_IF(first < 0x01000000ULL || last >= 0xe0000000ULL ||
++                        (first <= 0x7fffffffULL && last >= 0x7f000000ULL),
++                    "Sybil range must contain ordinary unicast IPv4 addresses");
++    auto contains = [first, last](Ipv4Address address) {
++        return first <= address.Get() && address.Get() <= last;
++    };
++    for (auto node = NodeList::Begin(); node != NodeList::End(); ++node)
++    {
++        const auto ipv4 = (*node)->GetObject<Ipv4>();
++        if (!ipv4)
++        {
++            continue;
++        }
++        for (uint32_t interface = 0; interface < ipv4->GetNInterfaces(); ++interface)
++        {
++            for (uint32_t index = 0; index < ipv4->GetNAddresses(interface); ++index)
++            {
++                const auto address = ipv4->GetAddress(interface, index);
++                NS_ABORT_MSG_IF(contains(address.GetLocal()),
++                                "Sybil range overlaps assigned IPv4 address " << address.GetLocal());
++                const auto mask = address.GetMask();
++                if (mask.GetPrefixLength() < 31)
++                {
++                    NS_ABORT_MSG_IF(contains(address.GetLocal().CombineMask(mask)) ||
++                                        contains(address.GetBroadcast()),
++                                    "Sybil range contains a subnet or broadcast address");
++                }
++            }
++        }
++    }
++}
++
++uint32_t
++RoutingProtocol::SendSpoofedMessages(const MessageList& messages, Ipv4Address source)
++{
++    uint32_t submissions = 0;
++    for (const auto& item : m_sendSockets)
++    {
++        const int32_t interface = m_ipv4->GetInterfaceForAddress(item.second.GetLocal());
++        if (interface < 0 || !m_ipv4->IsUp(interface))
++        {
++            continue;
++        }
++        Ptr<Packet> packet = Create<Packet>();
++        for (const auto& message : messages)
++        {
++            Ptr<Packet> part = Create<Packet>();
++            part->AddHeader(message);
++            packet->AddAtEnd(part);
++        }
++        PacketHeader olsrHeader;
++        olsrHeader.SetPacketLength(olsrHeader.GetSerializedSize() + packet->GetSize());
++        olsrHeader.SetPacketSequenceNumber(GetPacketSequenceNumber());
++        packet->AddHeader(olsrHeader);
++        Ipv4Address broadcast = item.second.GetLocal().GetSubnetDirectedBroadcast(item.second.GetMask());
++        UdpHeader udp;
++        udp.SetSourcePort(OLSR_PORT_NUMBER);
++        udp.SetDestinationPort(OLSR_PORT_NUMBER);
++        if (Node::ChecksumEnabled())
++        {
++            udp.EnableChecksums();
++            udp.InitializeChecksum(source, broadcast, 17);
++        }
++        packet->AddHeader(udp);
++        Ipv4Header ip;
++        ip.SetSource(source);
++        ip.SetDestination(broadcast);
++        ip.SetProtocol(17);
++        ip.SetTtl(1);
++        ip.SetIdentification(olsrHeader.GetPacketSequenceNumber());
++        ip.SetPayloadSize(packet->GetSize());
++        if (Node::ChecksumEnabled())
++        {
++            ip.EnableChecksum();
++        }
++        packet->AddHeader(ip);
++        Ptr<Socket> socket = Socket::CreateSocket(GetObject<Node>(), Ipv4RawSocketFactory::GetTypeId());
++        socket->SetAttribute("IpHeaderInclude", BooleanValue(true));
++        socket->SetAttribute("Protocol", UintegerValue(17));
++        socket->SetAllowBroadcast(true);
++        socket->BindToNetDevice(m_ipv4->GetNetDevice(interface));
++        if (socket->SendTo(packet, 0, InetSocketAddress(broadcast, 0)) > 0)
++        {
++            ++submissions;
++            m_txPacketTrace(olsrHeader, messages);
++        }
++        socket->Close();
++    }
++    return submissions;
++}
++
++}
+--- a/src/olsr/model/olsr-routing-protocol.h
++++ b/src/olsr/model/olsr-routing-protocol.h
+@@ -154,6 +154,9 @@
+      * @return the number of stream indices assigned by this model
+      */
+     int64_t AssignStreams(int64_t stream);
++    /** @return Fake-identity packets accepted for transmission on this node's interfaces. */
++    uint64_t GetSybilPackets() const { return m_sybilPackets; }
++
+ 
+     /**
+      * TracedCallback signature for Packet transmit and receive events.
+@@ -250,6 +253,20 @@
+     Time m_midInterval;        //!< MID messages' emission interval.
+     Time m_hnaInterval;        //!< HNA messages' emission interval.
+     Willingness m_willingness; //!< Willingness for forwarding packets on behalf of other nodes.
++
++    /**
++     * Broadcast OLSR messages with a specified simulated IPv4 source.
++     * @param messages Messages to serialize.
++     * @param source Forged source and originator identity.
++     * @return Number of interface submissions accepted by the raw socket.
++     */
++    uint32_t SendSpoofedMessages(const MessageList& messages, Ipv4Address source);
++    /** Verify the complete configured range before emitting any forged packet. */
++    void ValidateSybilRange() const;
++    bool m_sybilEnabled{false}; ///< Enable fake identities on this node.
++    uint32_t m_sybilCount{3}; ///< Number of fake identities.
++    Ipv4Address m_sybilAddressBase; ///< First reserved fake address.
++    uint64_t m_sybilPackets{0}; ///< Number of fake-identity packets sent.
+ 
+     OlsrState m_state; //!< Internal state with all needed data structs.
+     Ptr<Ipv4> m_ipv4;  //!< IPv4 object the routing is linked to.

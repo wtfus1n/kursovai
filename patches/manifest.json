@@ -1,0 +1,103 @@
+{
+  "ns3_version": "3.49",
+  "patch_application": "Each patch applies independently to clean upstream files with patch -p1.",
+  "source_verification_scope": "VERSION and SHA-256 of every file modified by the selected patch.",
+  "patches": {
+    "ns3-49-aodv-blackhole.patch": {
+      "protocol": "aodv",
+      "attack": "blackhole",
+      "sha256": "6476f5471b52f020da0e0a44e1248f4542b60a42ac98e643f381738f2843d5a1",
+      "upstream_files": {
+        "src/aodv/model/aodv-routing-protocol.cc": "104dbf6352b70949a114f4db3d3e21c6deb176082cc0b3138ff8025848eeb6b0",
+        "src/aodv/model/aodv-routing-protocol.h": "f2cd4c11dc87d910d319dc8e9ed824704f2ceb4eed0c0f95c0240d00e9185bfb"
+      },
+      "scenario_files": [
+        "aodv-drop-check.cc"
+      ]
+    },
+    "ns3-49-aodv-grayhole.patch": {
+      "protocol": "aodv",
+      "attack": "grayhole",
+      "sha256": "5624d081eff6a8f123232b519bb78db3c8337c7a733b0108ff092cdf9a3a3287",
+      "upstream_files": {
+        "src/aodv/model/aodv-routing-protocol.cc": "104dbf6352b70949a114f4db3d3e21c6deb176082cc0b3138ff8025848eeb6b0",
+        "src/aodv/model/aodv-routing-protocol.h": "f2cd4c11dc87d910d319dc8e9ed824704f2ceb4eed0c0f95c0240d00e9185bfb"
+      },
+      "scenario_files": [
+        "aodv-drop-check.cc"
+      ]
+    },
+    "ns3-49-aodv-wormhole.patch": {
+      "protocol": "aodv",
+      "attack": "wormhole",
+      "sha256": "01983b8ae8d80b9e4d5eb774cfbaf3846aeae8759efd8b8933a07d8f2dc1abea",
+      "upstream_files": {
+        "src/aodv/model/aodv-routing-protocol.cc": "104dbf6352b70949a114f4db3d3e21c6deb176082cc0b3138ff8025848eeb6b0",
+        "src/aodv/model/aodv-routing-protocol.h": "f2cd4c11dc87d910d319dc8e9ed824704f2ceb4eed0c0f95c0240d00e9185bfb"
+      },
+      "scenario_files": [
+        "aodv-wormhole-check.cc"
+      ]
+    },
+    "ns3-49-aodv-sybil.patch": {
+      "protocol": "aodv",
+      "attack": "sybil",
+      "sha256": "ff4b408577e2d67d1fa85d390cf7105243ba5ea3814ab6e07a80c6a28cc97589",
+      "upstream_files": {
+        "src/aodv/model/aodv-routing-protocol.cc": "104dbf6352b70949a114f4db3d3e21c6deb176082cc0b3138ff8025848eeb6b0",
+        "src/aodv/model/aodv-routing-protocol.h": "f2cd4c11dc87d910d319dc8e9ed824704f2ceb4eed0c0f95c0240d00e9185bfb"
+      },
+      "scenario_files": [
+        "aodv-sybil-check.cc"
+      ]
+    },
+    "ns3-49-olsr-blackhole.patch": {
+      "protocol": "olsr",
+      "attack": "blackhole",
+      "sha256": "93dcb7b414b5070e522d805c6854fbcef78ff9080ba57595eac4e40605cf8f64",
+      "upstream_files": {
+        "src/olsr/model/olsr-routing-protocol.cc": "c0d9ecf5eb18c7db0f16378338e34af7466eda34cacbce4f422e385684d2bcd9",
+        "src/olsr/model/olsr-routing-protocol.h": "8cac84749d7a47f33d422ffbe068cdc245f27ff4b34c4eddefc48994dcdbb1ce"
+      },
+      "scenario_files": [
+        "olsr-blackhole-check.cc"
+      ]
+    },
+    "ns3-49-olsr-grayhole.patch": {
+      "protocol": "olsr",
+      "attack": "grayhole",
+      "sha256": "c140fb938103968d85255ee32e96dad485362b177db000ac5445e0c0594afd1e",
+      "upstream_files": {
+        "src/olsr/model/olsr-routing-protocol.cc": "c0d9ecf5eb18c7db0f16378338e34af7466eda34cacbce4f422e385684d2bcd9",
+        "src/olsr/model/olsr-routing-protocol.h": "8cac84749d7a47f33d422ffbe068cdc245f27ff4b34c4eddefc48994dcdbb1ce"
+      },
+      "scenario_files": [
+        "olsr-grayhole-check.cc"
+      ]
+    },
+    "ns3-49-olsr-wormhole.patch": {
+      "protocol": "olsr",
+      "attack": "wormhole",
+      "sha256": "1e3cca432a8d7f8188d19e5a8875224145e20e28b64b8cf32bb6e647e4af0bf7",
+      "upstream_files": {
+        "src/olsr/model/olsr-routing-protocol.cc": "c0d9ecf5eb18c7db0f16378338e34af7466eda34cacbce4f422e385684d2bcd9",
+        "src/olsr/model/olsr-routing-protocol.h": "8cac84749d7a47f33d422ffbe068cdc245f27ff4b34c4eddefc48994dcdbb1ce"
+      },
+      "scenario_files": [
+        "olsr-wormhole-check.cc"
+      ]
+    },
+    "ns3-49-olsr-sybil.patch": {
+      "protocol": "olsr",
+      "attack": "sybil",
+      "sha256": "20b28adec1f65a979aee62d69a743269c76cb80c3e211270c8cf0179f25000b7",
+      "upstream_files": {
+        "src/olsr/model/olsr-routing-protocol.cc": "c0d9ecf5eb18c7db0f16378338e34af7466eda34cacbce4f422e385684d2bcd9",
+        "src/olsr/model/olsr-routing-protocol.h": "8cac84749d7a47f33d422ffbe068cdc245f27ff4b34c4eddefc48994dcdbb1ce"
+      },
+      "scenario_files": [
+        "olsr-sybil-check.cc"
+      ]
+    }
+  }
+}

@@ -1,4 +1,12 @@
-# Only patches go to GitHub; everything else stays local
+# Track the patch kit and its documentation.
 /*
 !/.gitignore
+!/.gitattributes
+!/README.md
+!/COPYING
 !/patches/
+
+*.docx
+*.zip
+*.pcap
+__pycache__/
