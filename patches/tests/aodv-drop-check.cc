@@ -69,6 +69,7 @@ int main(int argc, char** argv)
 {
     bool malicious = false;
     bool checkAutomaticStreams = false;
+    bool delayedStart = false;
     double probability = 1.0;
     uint32_t seed = 17;
     uint64_t run = 1;
@@ -77,10 +78,13 @@ int main(int argc, char** argv)
     cmd.AddValue("malicious", "Enable attacker on node 1", malicious);
     cmd.AddValue("checkAutomaticStreams", "Check RNG allocation without running the traffic scenario", checkAutomaticStreams);
     cmd.AddValue("probability", "Gray-hole drop probability", probability);
+    cmd.AddValue("delayedStart", "Start grayhole packet dropping at 6 seconds", delayedStart);
     cmd.AddValue("seed", "RNG seed", seed);
     cmd.AddValue("run", "RNG run number", run);
     cmd.AddValue("packets", "Number of UDP packets", packets);
     cmd.Parse(argc, argv);
+    const Time trafficStart = Seconds(2);
+    const Time dropStart = Seconds(6);
     RngSeedManager::SetSeed(seed);
     RngSeedManager::SetRun(run);
     if (checkAutomaticStreams)
@@ -122,7 +126,12 @@ int main(int argc, char** argv)
         auto routing=nodes.Get(i)->GetObject<aodv::RoutingProtocol>();
         routing->AssignStreams(100 + 10*i);
     }
-    attacker->SetAttributeFailSafe("AttackDropProbability", DoubleValue(probability));
+    const bool hasProbability =
+        attacker->SetAttributeFailSafe("AttackDropProbability", DoubleValue(delayedStart ? 0.0 : probability));
+    NS_ABORT_MSG_IF(delayedStart &&
+                        (!malicious || !hasProbability || packets <= 100 ||
+                         !(probability >= 0.0 && probability <= 1.0)),
+                    "Delayed start requires the enabled grayhole patch, more than 100 packets, and p in [0, 1]");
     attacker->TraceConnectWithoutContext("AttackDrop", MakeCallback(&Dropped));
     attacker->TraceConnectWithoutContext("ForgedReply", MakeCallback(&Forged));
     nodes.Get(1)->GetObject<Ipv4L3Protocol>()->TraceConnectWithoutContext("UnicastForward", MakeCallback(&Forwarded));
@@ -143,13 +152,23 @@ int main(int argc, char** argv)
     client.SetAttribute("Interval", TimeValue(MilliSeconds(40)));
     client.SetAttribute("PacketSize", UintegerValue(128));
     auto sender=client.Install(nodes.Get(0));
-    sender.Start(Seconds(2));
+    sender.Start(trafficStart);
     UdpClientHelper localClient(interfaces.GetAddress(1), 9001);
     localClient.SetAttribute("MaxPackets", UintegerValue(10));
     localClient.SetAttribute("Interval", TimeValue(MilliSeconds(100)));
     localClient.SetAttribute("PacketSize", UintegerValue(128));
     auto localSender=localClient.Install(nodes.Get(0));
     localSender.Start(Seconds(0.5));
+    uint64_t receivedBefore = 0;
+    uint32_t transitBefore = 0;
+    if (delayedStart)
+    {
+        Simulator::Schedule(dropStart, [&, attacker, target] {
+            receivedBefore = target->GetTotalRx() / 128;
+            transitBefore = transit;
+            attacker->SetAttribute("AttackDropProbability", DoubleValue(probability));
+        });
+    }
     Simulator::Stop(Seconds(5 + packets*0.04));
     Simulator::Run();
     auto received=target->GetTotalRx()/128;
@@ -158,12 +177,20 @@ int main(int argc, char** argv)
               << ",\"received\":" << received << ",\"attackDrops\":" << drops
               << ",\"forgedReplies\":" << forgeries << ",\"ipForwarded\":" << transit
               << ",\"ordinaryIpDrops\":" << ordinaryIpDrops << ",\"ordinaryDropReason\":" << ordinaryDropReason
-              << ",\"localReceived\":" << localRx << ",\"dropFingerprint\":" << dropFingerprint << "}" << std::endl;
-    bool ok=localRx==10;
+              << ",\"localReceived\":" << localRx << ",\"dropFingerprint\":" << dropFingerprint;
+    const auto receivedAfter = received - receivedBefore;
+    if (delayedStart)
+    {
+        std::cout << ",\"dropStart\":" << dropStart.GetSeconds()
+                  << ",\"receivedBefore\":" << receivedBefore
+                  << ",\"receivedAfter\":" << receivedAfter;
+    }
+    std::cout << "}" << std::endl;
+    bool ok = localRx == 10 && (!delayedStart || receivedBefore > 0);
     if (!malicious || probability==0) ok=ok && received>packets*0.9 && drops==0;
-    else if (probability==1) ok=ok && received==0 && drops>0 && forgeries>0;
-    else ok=ok && received>0 && drops>0 && forgeries>0 &&
-                std::abs(static_cast<double>(drops)/(drops+transit)-probability)<0.15;
+    else if (probability==1) ok=ok && receivedAfter==0 && drops>0 && forgeries>0;
+    else ok=ok && receivedAfter>0 && drops>0 && forgeries>0 &&
+                std::abs(static_cast<double>(drops)/(drops+transit-transitBefore)-probability)<0.15;
     Simulator::Destroy();
     return ok ? 0 : 1;
 }
