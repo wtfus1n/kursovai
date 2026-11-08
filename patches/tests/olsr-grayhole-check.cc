@@ -20,6 +20,7 @@ int main(int argc, char** argv)
     cmd.AddValue("seed", "RNG seed", seed);
     cmd.AddValue("run", "RNG run", run);
     cmd.Parse(argc, argv);
+    const Time trafficStart = Seconds(20);
     RngSeedManager::SetSeed(seed);
     RngSeedManager::SetRun(run);
     RngSeedManager::ResetNextStreamIndex();
@@ -65,7 +66,8 @@ int main(int argc, char** argv)
         protocols.push_back(nodes.Get(i)->GetObject<Ipv4>()->GetRoutingProtocol()->GetObject<olsr::RoutingProtocol>());
     }
     protocols[2]->SetAttribute("AttackEnabled", BooleanValue(enabled));
-    protocols[2]->SetAttribute("AttackStart", TimeValue(Seconds(30)));
+    // Let OLSR establish routes before the first measured packet and start dropping with it.
+    protocols[2]->SetAttribute("AttackStart", TimeValue(trafficStart));
     protocols[2]->SetAttribute("AttackDropProbability", DoubleValue(probability));
     olsr.AssignStreams(nodes, 100);
 
@@ -80,14 +82,14 @@ int main(int argc, char** argv)
     client.SetAttribute("Interval", TimeValue(MilliSeconds(100)));
     client.SetAttribute("PacketSize", UintegerValue(128));
     auto source = client.Install(nodes.Get(0));
-    source.Start(Seconds(20));
+    source.Start(trafficStart);
     source.Stop(Seconds(50));
     UdpClientHelper localClient(interfaces.GetAddress(2), 9001);
     localClient.SetAttribute("MaxPackets", UintegerValue(300));
     localClient.SetAttribute("Interval", TimeValue(MilliSeconds(100)));
     localClient.SetAttribute("PacketSize", UintegerValue(128));
     auto localSource = localClient.Install(nodes.Get(0));
-    localSource.Start(Seconds(20));
+    localSource.Start(trafficStart);
     localSource.Stop(Seconds(50));
     Simulator::Stop(Seconds(55));
     Simulator::Run();
@@ -119,6 +121,8 @@ int main(int argc, char** argv)
         NS_ABORT_MSG_IF(protocols[2]->GetAttackDataDrops() == 0, "No actual transit packets dropped");
         NS_ABORT_MSG_IF(protocols[2]->GetAttackControlDrops() == 0, "No eligible MPR messages dropped");
         NS_ABORT_MSG_IF(delivered >= 290, "Attack had no observed delivery effect");
+        NS_ABORT_MSG_IF(probability == 1.0 && delivered != 0,
+                        "Full drop probability must block all measured transit traffic");
     }
     Simulator::Destroy();
     return 0;

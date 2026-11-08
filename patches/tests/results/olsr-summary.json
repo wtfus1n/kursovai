@@ -43,21 +43,21 @@
     "attack": "grayhole",
     "enabled": 1,
     "probability": 0.5,
-    "routeFingerprint": 9554657073229614963,
-    "delivered": 204,
+    "routeFingerprint": 8786433662531161447,
+    "delivered": 152,
     "local": 300,
-    "dataDrops": 94,
-    "controlDrops": 11
+    "dataDrops": 148,
+    "controlDrops": 22
   },
   {
     "attack": "grayhole",
     "enabled": 1,
     "probability": 1,
     "routeFingerprint": 15847086914232839137,
-    "delivered": 100,
+    "delivered": 0,
     "local": 300,
-    "dataDrops": 41,
-    "controlDrops": 26
+    "dataDrops": 51,
+    "controlDrops": 36
   },
   {
     "attack": "sybil",
