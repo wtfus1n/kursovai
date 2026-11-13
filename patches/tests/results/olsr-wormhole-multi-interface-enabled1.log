@@ -1,3 +1,0 @@
-STATE routeFingerprint=16538008183362277322
-RESULT attack=wormhole enabled=1 remoteNeighbors=1 routes=4 transfers=246 replays=246
-WIRE_CHECK original=1 replay=1

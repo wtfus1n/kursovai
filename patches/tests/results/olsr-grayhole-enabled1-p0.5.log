@@ -1,2 +1,0 @@
-STATE routeFingerprint=8786433662531161447
-RESULT attack=grayhole enabled=1 probability=0.5 delivered=152 local=300 dataDrops=148 controlDrops=22

@@ -94,6 +94,6 @@ cp /path/to/patches/tests/aodv-drop-check.cc scratch/
 
 Для обоих патчей прошли четыре неизменённых набора NS-3: `aodv-routing-id-cache`, `routing-aodv`, `routing-aodv-loopback`, `routing-aodv-regression` (включая эталонные PCAP chain и bug-772). Скрипт `tests/run_aodv_unit_tests.sh` собирает библиотеку `aodv-test`, компилирует стандартный `utils/test-runner.cc` с этой библиотекой и запускает перечисленные наборы; исходники тестов не изменяются.
 
-Проверки наложения на исходное дерево записаны в `tests/results/aodv-blackhole-dry-run.log` и `aodv-grayhole-dry-run.log`. SHA-256 исходных файлов до модификации сохранены в `tests/results/aodv-base-sha256.txt`. Результаты сценариев и штатных тестов приведены в [сводке AODV](tests/results/aodv-validation-summary.json).
+Проверки наложения на исходное дерево записаны в `tests/results/aodv-blackhole-dry-run.log` и `aodv-grayhole-dry-run.log`. SHA-256 исходных файлов до модификации сохранены в `tests/results/aodv-base-sha256.txt`. Результаты сценариев и штатных тестов приведены в [сводке AODV](https://github.com/wtfus1n/kursovai/blob/oldmian/patches/tests/results/aodv-validation-summary.json).
 
 Описание двух оставшихся моделей AODV и их проверок: [туннель и Сивилла](aodv_wormhole_sybil_notes.md).

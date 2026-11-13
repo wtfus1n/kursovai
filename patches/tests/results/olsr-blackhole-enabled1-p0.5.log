@@ -1,2 +1,0 @@
-STATE routeFingerprint=15847086914232839137
-RESULT attack=blackhole enabled=1 probability=0.5 delivered=100 local=300 dataDrops=52 controlDrops=26
