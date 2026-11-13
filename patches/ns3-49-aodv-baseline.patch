@@ -1,0 +1,99 @@
+diff --git a/scratch/aodv-baseline.cc b/scratch/aodv-baseline.cc
+new file mode 100644
+--- /dev/null
++++ b/scratch/aodv-baseline.cc
+@@ -0,0 +1,94 @@
++// SPDX-License-Identifier: GPL-2.0-only
++
++#include "ns3/aodv-helper.h"
++#include "ns3/applications-module.h"
++#include "ns3/core-module.h"
++#include "ns3/internet-module.h"
++#include "ns3/mobility-module.h"
++#include "ns3/network-module.h"
++#include "ns3/wifi-module.h"
++
++#include <iostream>
++
++using namespace ns3;
++
++int
++main(int argc, char* argv[])
++{
++    uint32_t nodes = 3;
++    uint32_t packets = 20;
++    double start = 20.0;
++
++    CommandLine cmd(__FILE__);
++    cmd.AddValue("nodes", "Number of nodes in the line, from 3 to 20", nodes);
++    cmd.AddValue("packets", "Number of UDP datagrams to send", packets);
++    cmd.AddValue("start", "Traffic start time in seconds", start);
++    cmd.Parse(argc, argv);
++    NS_ABORT_MSG_IF(nodes < 3 || nodes > 20, "nodes must be in [3, 20]");
++    NS_ABORT_MSG_IF(packets == 0, "packets must be positive");
++    NS_ABORT_MSG_IF(!(start >= 1.0 && start <= 3600.0), "start must be in [1, 3600]");
++
++    constexpr double spacing = 40.0;
++    constexpr double interval = 0.25;
++    constexpr uint16_t port = 9000;
++    constexpr uint32_t packetSize = 128;
++
++    NodeContainer network;
++    network.Create(nodes);
++
++    Ptr<ListPositionAllocator> positions = CreateObject<ListPositionAllocator>();
++    for (uint32_t index = 0; index < nodes; ++index)
++    {
++        positions->Add(Vector(index * spacing, 0, 0));
++    }
++    MobilityHelper mobility;
++    mobility.SetPositionAllocator(positions);
++    mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
++    mobility.Install(network);
++
++    YansWifiChannelHelper channel;
++    channel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
++    // Limit direct reception to immediate neighbors so the flow exercises routing.
++    channel.AddPropagationLoss("ns3::RangePropagationLossModel",
++                               "MaxRange",
++                               DoubleValue(1.5 * spacing));
++    YansWifiPhyHelper phy;
++    phy.SetChannel(channel.Create());
++    WifiHelper wifi;
++    wifi.SetStandard(WIFI_STANDARD_80211a);
++    WifiMacHelper mac;
++    mac.SetType("ns3::AdhocWifiMac");
++    const NetDeviceContainer devices = wifi.Install(phy, mac, network);
++
++    AodvHelper routing;
++    InternetStackHelper internet;
++    internet.SetRoutingHelper(routing);
++    internet.Install(network);
++
++    Ipv4AddressHelper addresses;
++    addresses.SetBase("10.1.1.0", "255.255.255.0");
++    const Ipv4InterfaceContainer interfaces = addresses.Assign(devices);
++
++    UdpServerHelper receiver(port);
++    ApplicationContainer servers = receiver.Install(network.Get(nodes - 1));
++    servers.Start(Seconds(0));
++
++    UdpClientHelper sender(interfaces.GetAddress(nodes - 1), port);
++    sender.SetAttribute("MaxPackets", UintegerValue(packets));
++    sender.SetAttribute("Interval", TimeValue(Seconds(interval)));
++    sender.SetAttribute("PacketSize", UintegerValue(packetSize));
++    ApplicationContainer clients = sender.Install(network.Get(0));
++    clients.Start(Seconds(start));
++
++    Simulator::Stop(Seconds(start + packets * interval + 5.0));
++    Simulator::Run();
++
++    const uint64_t sent = DynamicCast<UdpClient>(clients.Get(0))->GetTotalTx() / packetSize;
++    const uint64_t received = DynamicCast<UdpServer>(servers.Get(0))->GetReceived();
++    const double pdr = sent == 0 ? 0.0 : 100.0 * received / sent;
++    std::cout << "protocol=aodv nodes=" << nodes << " sent=" << sent
++              << " received=" << received << " pdr_percent=" << pdr << '\n';
++
++    Simulator::Destroy();
++    return 0;
++}
